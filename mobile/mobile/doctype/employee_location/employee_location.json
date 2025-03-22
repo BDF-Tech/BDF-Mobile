@@ -1,0 +1,98 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "format:{user}-{date}",
+ "creation": "2023-11-02 18:22:43.751649",
+ "default_view": "List",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "user",
+  "column_break_jtul1",
+  "device_id",
+  "date",
+  "section_break_4krbe",
+  "my_location",
+  "location_table",
+  "check_data",
+  "distance"
+ ],
+ "fields": [
+  {
+   "default": "User",
+   "fieldname": "user",
+   "fieldtype": "Data",
+   "label": "User"
+  },
+  {
+   "default": "Today",
+   "fieldname": "date",
+   "fieldtype": "Date",
+   "label": "Date"
+  },
+  {
+   "fieldname": "my_location",
+   "fieldtype": "Geolocation",
+   "label": "My Location"
+  },
+  {
+   "fieldname": "location_table",
+   "fieldtype": "Table",
+   "label": "Location Table",
+   "options": "employee location table"
+  },
+  {
+   "fieldname": "check_data",
+   "fieldtype": "Data",
+   "hidden": 1,
+   "label": "check data"
+  },
+  {
+   "default": "0",
+   "fieldname": "distance",
+   "fieldtype": "Float",
+   "label": "Distance(in Km)",
+   "precision": "2"
+  },
+  {
+   "fieldname": "device_id",
+   "fieldtype": "Data",
+   "label": "Device ID"
+  },
+  {
+   "fieldname": "column_break_jtul1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "section_break_4krbe",
+   "fieldtype": "Section Break"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2024-03-05 17:11:41.660237",
+ "modified_by": "Administrator",
+ "module": "Mobile",
+ "name": "Employee Location",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}
