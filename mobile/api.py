@@ -68,6 +68,63 @@ def get_date_range(filter_type, start_date=None, end_date=None):
 # 📦 ITEM CATALOG API
 # =========================================================
 
+@frappe.whitelist()
+def get_item_list():
+    try:
+        all_groups = []
+
+        # 1. Fetch descendants for "Finished Goods"
+        if frappe.db.exists("Item Group", "Finished Goods"):
+            fg_children = get_descendants_of("Item Group", "Finished Goods")
+            for item in fg_children:
+                if isinstance(item, dict):
+                    all_groups.append(item.get("name"))
+                else:
+                    all_groups.append(item) 
+            all_groups.append("Finished Goods") 
+
+        # 2. Fetch descendants for "Trading"
+        if frappe.db.exists("Item Group", "Trading"):
+            trading_children = get_descendants_of("Item Group", "Trading")
+            for item in trading_children:
+                if isinstance(item, dict):
+                    all_groups.append(item.get("name"))
+                else:
+                    all_groups.append(item)
+            all_groups.append("Trading")
+
+        if not all_groups:
+            return []
+
+        groups_tuple = tuple(set(all_groups))
+
+        query = """
+            SELECT 
+                i.item_code, 
+                i.item_name, 
+                i.image, 
+                i.item_group,
+                COALESCE(ip.price_list_rate, 0) as price
+            FROM 
+                `tabItem` i
+            LEFT JOIN 
+                `tabItem Price` ip 
+            ON 
+                i.item_code = ip.item_code 
+                AND ip.price_list = 'All Franchise Price'
+            WHERE 
+                i.item_group IN %(groups)s
+                AND i.disabled = 0
+                AND i.is_sales_item = 1
+            ORDER BY 
+                i.item_name ASC
+        """
+        items = frappe.db.sql(query, {"groups": groups_tuple}, as_dict=True)
+        return items
+
+    except Exception as e:
+        frappe.log_error(frappe.get_traceback(), "Catalog SQL Error")
+        return {"error": str(e)}
     
 # =========================================================
 # 📊 DASHBOARD API
@@ -89,24 +146,55 @@ def get_my_dashboard_stats():
 # 🛒 ORDER PLACEMENT API
 # =========================================================
 
-# =========================================================
-# 📜 SALES ORDER LIST (UPDATED)
-# =========================================================
+@frappe.whitelist()
+def get_order_list(filter_type="This Year", start_date=None, end_date=None):
+    """
+    Returns list of Sales Orders. 
+    Added start_date and end_date params for Custom filtering.
+    """
+    customer_id = get_logged_in_customer()
+    
+    # 1. Get resolved dates based on filter type or custom input
+    from_date, to_date = get_date_range(filter_type, start_date, end_date)
 
-# =========================================================
-# 🧾 SALES INVOICE LIST (UPDATED)
-# =========================================================
-
-# =========================================================
-# 📒 LEDGER REPORT
-# =========================================================
-
-# =========================================================
-# 👤 PROFILE API
-# =========================================================
+    orders = frappe.db.get_list("Sales Order",
+        filters={
+            "customer": customer_id,
+            "transaction_date": ["between", [from_date, to_date]],
+            "docstatus": ["!=", 2]
+        },
+        fields=["name", "transaction_date", "grand_total", "status", "delivery_date", "total_qty"],
+        order_by="transaction_date desc"
+    )
+    return orders
 
 @frappe.whitelist()
-def get_user_profile():
+def get_order_details(order_id):
+    if not frappe.db.exists("Sales Order", order_id):
+        frappe.throw("Order not found")
+    
+    doc = frappe.get_doc("Sales Order", order_id)
+    current_customer = get_logged_in_customer()
+    
+    if doc.customer != current_customer:
+        frappe.throw("Unauthorized access to this order")
+
+    return {
+        "name": doc.name,
+        "date": doc.transaction_date,
+        "status": doc.status,
+        "grand_total": doc.grand_total,
+        "taxes": doc.total_taxes_and_charges,
+        "items": [{
+            "item_code": item.item_code,
+            "item_name": item.item_name,
+            "qty": item.qty,
+            "rate": item.rate,
+            "amount": item.amount,
+            "image": frappe.db.get_value("Item", item.item_code, "image")
+        } for item in doc.items]
+    }
+
     try:
         try:
             customer_id = get_logged_in_customer()
