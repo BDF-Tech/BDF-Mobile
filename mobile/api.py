@@ -195,6 +195,51 @@ def get_order_details(order_id):
         } for item in doc.items]
     }
 
+# =========================================================
+# 👤 PROFILE API
+# =========================================================
+
+@frappe.whitelist()
+def get_user_profile():
+    try:
+        try:
+            customer_id = get_logged_in_customer()
+        except Exception:
+            customer_id = None
+
+        user = frappe.session.user
+        if user == "Guest":
+            return {"error": "Not Logged In"}
+
+        user_doc = frappe.get_doc("User", user)
+        
+        customer_data = {}
+        if customer_id:
+            customer_doc = frappe.db.get_value("Customer", customer_id, 
+                ["custom_starting_date_of_the_contract", "food_license_number", "food_license_validity"], 
+                as_dict=True
+            )
+            
+            if customer_doc:
+                customer_data = {
+                    "contract_date": formatdate(customer_doc.get("custom_starting_date_of_the_contract")) if customer_doc.get("custom_starting_date_of_the_contract") else None,
+                    "license_no": customer_doc.get("food_license_number"),
+                    "license_validity": formatdate(customer_doc.get("food_license_validity")) if customer_doc.get("food_license_validity") else None
+                }
+
+        return {
+            "full_name": user_doc.full_name,
+            "email": user_doc.email,
+            "gender": user_doc.gender,
+            "dob": formatdate(user_doc.birth_date) if user_doc.birth_date else None,
+            "image": user_doc.user_image,
+            "customer_id": customer_id,
+            **customer_data
+        }
+
+    except Exception as e:
+        frappe.log_error(f"Profile Error: {str(e)}")
+        return {"error": str(e)}
     try:
         try:
             customer_id = get_logged_in_customer()
