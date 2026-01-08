@@ -41,29 +41,23 @@ def get_logged_in_customer():
 # =========================================================
 
 def get_date_range(filter_type, start_date=None, end_date=None):
+    """
+    Logic: 
+    1. If 'Custom' is selected AND dates are provided -> Use them.
+    2. ANYTHING else (Default) -> Return Last 7 Days.
+    """
     today_date = today()
 
+    # 1. Custom Logic
     if filter_type == "Custom" and start_date and end_date:
-        # ✅ Correctly handle custom dates passed from Flutter
         return start_date, end_date
 
-    elif filter_type == "This Week":
-        from_date = add_days(today_date, -getdate(today_date).weekday())
-        to_date = add_days(from_date, 6)
-    elif filter_type == "This Month":
-        from_date = get_first_day(today_date)
-        to_date = get_last_day(today_date)
-    elif filter_type == "This Year":
-        year = getdate(today_date).year
-        from_date = f"{year}-01-01"
-        to_date = f"{year}-12-31"
-    else:
-        # Default fallback (Last 30 Days)
-        from_date = add_days(today_date, -30)
-        to_date = today_date
+    # 2. Default Fallback: Last 7 Days
+    # logic: today minus 7 days covers the past week
+    from_date = add_days(today_date, -7)
+    to_date = today_date
 
     return from_date, to_date
-
 # =========================================================
 # 📦 ITEM CATALOG API
 # =========================================================
@@ -147,14 +141,70 @@ def get_my_dashboard_stats():
 # =========================================================
 
 @frappe.whitelist()
-def get_order_list(filter_type="This Year", start_date=None, end_date=None):
+def place_order(items, req_date=None, req_shift=None):
+    try:
+        customer_id = get_logged_in_customer()
+
+        if isinstance(items, str):
+            cart_items = json.loads(items)
+        else:
+            cart_items = items
+
+        if not cart_items:
+            frappe.throw("Cannot place empty order")
+
+        target_date = req_date if req_date else add_days(today(), 1)
+        target_shift = req_shift if req_shift else "Morning"
+
+        existing_so_name = frappe.db.get_value("Sales Order", {
+            "customer": customer_id,
+            "delivery_date": target_date,
+            "delivery_shift": target_shift, 
+            "docstatus": ["<", 2] 
+        }, "name")
+
+        if existing_so_name:
+            so = frappe.get_doc("Sales Order", existing_so_name)
+            if so.docstatus == 1:
+                return {"status": "error", "message": "Order already submitted."}
+            so.items = [] 
+        else:
+            so = frappe.new_doc("Sales Order")
+            so.customer = customer_id
+            so.transaction_date = today()
+            so.delivery_date = target_date
+            so.delivery_shift = target_shift
+            so.order_type = "Sales"
+            so.company = frappe.defaults.get_user_default("Company")
+
+        for row in cart_items:
+            so.append("items", {
+                "item_code": row.get("item_code"),
+                "qty": row.get("qty"),
+                "delivery_date": target_date,
+                "rate": row.get("price", 0)
+            })
+
+        so.save(ignore_permissions=True)
+        return {"status": "success", "order_name": so.name}
+
+    except Exception as e:
+        frappe.log_error(f"Order Error: {str(e)}")
+        return {"status": "error", "message": str(e)}
+
+# =========================================================
+# 📜 SALES ORDER LIST (UPDATED)
+# =========================================================
+
+@frappe.whitelist()
+def get_order_list(filter_type="Last 7 Days", start_date=None, end_date=None):
     """
     Returns list of Sales Orders. 
-    Added start_date and end_date params for Custom filtering.
+    Default Filter: Last 7 Days
     """
     customer_id = get_logged_in_customer()
     
-    # 1. Get resolved dates based on filter type or custom input
+    # 1. Get resolved dates (Defaults to Last 7 Days if not Custom)
     from_date, to_date = get_date_range(filter_type, start_date, end_date)
 
     orders = frappe.db.get_list("Sales Order",
@@ -196,50 +246,126 @@ def get_order_details(order_id):
     }
 
 # =========================================================
+# 🧾 SALES INVOICE LIST (UPDATED)
+# =========================================================
+
+@frappe.whitelist()
+def get_invoice_list(filter_type="Last 7 Days", start_date=None, end_date=None):
+    """
+    Returns list of Sales Invoices. 
+    Default Filter: Last 7 Days
+    """
+    customer_id = get_logged_in_customer()
+    
+    # 1. Get resolved dates (Defaults to Last 7 Days if not Custom)
+    from_date, to_date = get_date_range(filter_type, start_date, end_date)
+
+    invoices = frappe.db.get_list("Sales Invoice",
+        filters={
+            "customer": customer_id,
+            "posting_date": ["between", [from_date, to_date]],
+            "docstatus": 1
+        },
+        fields=["name", "posting_date", "grand_total", "outstanding_amount", "status"],
+        order_by="posting_date desc"
+    )
+    return invoices
+
+@frappe.whitelist()
+def get_invoice_details(invoice_id):
+    if not frappe.db.exists("Sales Invoice", invoice_id):
+        frappe.throw("Invoice not found")
+
+    doc = frappe.get_doc("Sales Invoice", invoice_id)
+    current_customer = get_logged_in_customer()
+
+    if doc.customer != current_customer:
+        frappe.throw("Unauthorized access")
+
+    return {
+        "name": doc.name,
+        "date": doc.posting_date,
+        "status": doc.status,
+        "grand_total": doc.grand_total,
+        "outstanding": doc.outstanding_amount,
+        "items": [{
+            "item_code": item.item_code,
+            "item_name": item.item_name,
+            "qty": item.qty,
+            "rate": item.rate,
+            "amount": item.amount
+        } for item in doc.items]
+    }
+
+# =========================================================
+# 📒 LEDGER REPORT
+# =========================================================
+
+@frappe.whitelist()
+def get_customer_ledger(filter_type="This Year", start_date=None, end_date=None, voucher_type=None):
+    customer_id = get_logged_in_customer()
+    
+    # 1. Get resolved dates
+    from_date, to_date = get_date_range(filter_type, start_date, end_date)
+    
+    # 2. Base Filters
+    filters = {
+        "party_type": "Customer",
+        "party": customer_id,
+        "posting_date": ["between", [from_date, to_date]],
+        "is_cancelled": 0
+    }
+
+    # 3. Dynamic Filtering Logic
+    if voucher_type:
+        filters["voucher_type"] = voucher_type
+    else:
+        # Show Everything (Invoices + Payments), excluding internal tech entries
+        filters["voucher_type"] = ["not in", ["Payment Ledger Entry"]] 
+
+    # 4. Fetch Data
+    gl_entries = frappe.get_list("GL Entry",
+        filters=filters,
+        fields=["posting_date", "voucher_type", "voucher_no", "debit", "credit", "remarks"],
+        order_by="posting_date asc, creation asc",
+        ignore_permissions=True 
+    )
+    
+    # 5. Calculate Background Balance (Math only, no row added)
+    opening_balance_data = frappe.db.sql("""
+        SELECT SUM(debit - credit) as balance
+        FROM `tabGL Entry`
+        WHERE party_type = 'Customer' 
+        AND party = %s 
+        AND posting_date < %s
+        AND is_cancelled = 0
+    """, (customer_id, from_date), as_dict=True)
+    
+    # We initialize the math here, but we DO NOT append a row to 'data'
+    running_balance = opening_balance_data[0].balance or 0.0
+    
+    data = []
+    
+    # 6. Process Transactions
+    for entry in gl_entries:
+        running_balance += (entry.debit - entry.credit)
+        data.append({
+            "date": entry.posting_date,
+            "voucher_type": entry.voucher_type,
+            "voucher_no": entry.voucher_no,
+            "debit": entry.debit,
+            "credit": entry.credit,
+            "balance": running_balance # This will now be mathematically correct
+        })
+        
+    return data
+
+# =========================================================
 # 👤 PROFILE API
 # =========================================================
 
 @frappe.whitelist()
 def get_user_profile():
-    try:
-        try:
-            customer_id = get_logged_in_customer()
-        except Exception:
-            customer_id = None
-
-        user = frappe.session.user
-        if user == "Guest":
-            return {"error": "Not Logged In"}
-
-        user_doc = frappe.get_doc("User", user)
-        
-        customer_data = {}
-        if customer_id:
-            customer_doc = frappe.db.get_value("Customer", customer_id, 
-                ["custom_starting_date_of_the_contract", "food_license_number", "food_license_validity"], 
-                as_dict=True
-            )
-            
-            if customer_doc:
-                customer_data = {
-                    "contract_date": formatdate(customer_doc.get("custom_starting_date_of_the_contract")) if customer_doc.get("custom_starting_date_of_the_contract") else None,
-                    "license_no": customer_doc.get("food_license_number"),
-                    "license_validity": formatdate(customer_doc.get("food_license_validity")) if customer_doc.get("food_license_validity") else None
-                }
-
-        return {
-            "full_name": user_doc.full_name,
-            "email": user_doc.email,
-            "gender": user_doc.gender,
-            "dob": formatdate(user_doc.birth_date) if user_doc.birth_date else None,
-            "image": user_doc.user_image,
-            "customer_id": customer_id,
-            **customer_data
-        }
-
-    except Exception as e:
-        frappe.log_error(f"Profile Error: {str(e)}")
-        return {"error": str(e)}
     try:
         try:
             customer_id = get_logged_in_customer()
