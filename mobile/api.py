@@ -8,6 +8,7 @@ from erpnext.accounts.party import get_dashboard_info
 # 🛠️ HELPER: RESOLVE CUSTOMER FROM LOGGED-IN USER
 # =========================================================
 
+
 def get_logged_in_customer():
     """
     Finds the Customer linked to the current session user.
@@ -30,7 +31,7 @@ def get_logged_in_customer():
             "parent": contact_name,
             "link_doctype": "Customer"
         }, "link_name")
-    
+
     if customer_id:
         return customer_id
 
@@ -39,6 +40,7 @@ def get_logged_in_customer():
 # =========================================================
 # 📅 HELPER: DATE FILTERS (UPDATED)
 # =========================================================
+
 
 def get_date_range(filter_type, start_date=None, end_date=None):
     """
@@ -62,67 +64,99 @@ def get_date_range(filter_type, start_date=None, end_date=None):
 # 📦 ITEM CATALOG API
 # =========================================================
 
+
 @frappe.whitelist()
 def get_item_list():
     try:
         all_groups = []
 
-        # 1. Fetch descendants for "Finished Goods"
+        # 1️⃣ Collect Item Groups
         if frappe.db.exists("Item Group", "Finished Goods"):
             fg_children = get_descendants_of("Item Group", "Finished Goods")
-            for item in fg_children:
-                if isinstance(item, dict):
-                    all_groups.append(item.get("name"))
-                else:
-                    all_groups.append(item) 
-            all_groups.append("Finished Goods") 
+            for g in fg_children:
+                all_groups.append(g.get("name") if isinstance(g, dict) else g)
+            all_groups.append("Finished Goods")
 
-        # 2. Fetch descendants for "Trading"
         if frappe.db.exists("Item Group", "Trading"):
             trading_children = get_descendants_of("Item Group", "Trading")
-            for item in trading_children:
-                if isinstance(item, dict):
-                    all_groups.append(item.get("name"))
-                else:
-                    all_groups.append(item)
+            for g in trading_children:
+                all_groups.append(g.get("name") if isinstance(g, dict) else g)
             all_groups.append("Trading")
 
         if not all_groups:
             return []
 
-        groups_tuple = tuple(set(all_groups))
+        groups = tuple(set(all_groups))
 
-        query = """
-            SELECT 
-                i.item_code, 
-                i.item_name, 
-                i.image, 
+        # 2️⃣ Fetch Items with Base Rate
+        items = frappe.db.sql("""
+            SELECT
+                i.item_code,
+                i.item_name,
+                i.image,
                 i.item_group,
-                COALESCE(ip.price_list_rate, 0) as price
-            FROM 
-                `tabItem` i
-            LEFT JOIN 
-                `tabItem Price` ip 
-            ON 
-                i.item_code = ip.item_code 
+                i.stock_uom,
+                COALESCE(ip.price_list_rate, 0) AS base_rate
+            FROM `tabItem` i
+            LEFT JOIN `tabItem Price` ip
+                ON ip.item_code = i.item_code
                 AND ip.price_list = 'All Franchise Price'
-            WHERE 
+            WHERE
                 i.item_group IN %(groups)s
                 AND i.disabled = 0
                 AND i.is_sales_item = 1
-            ORDER BY 
-                i.item_name ASC
-        """
-        items = frappe.db.sql(query, {"groups": groups_tuple}, as_dict=True)
-        return items
+            ORDER BY i.item_name ASC
+        """, {"groups": groups}, as_dict=True)
+
+        result = []
+
+        # 3️⃣ Attach UOMs with Deduplication
+        for item in items:
+            uom_rows = frappe.get_all(
+                "UOM Conversion Detail",
+                filters={"parent": item.item_code},
+                fields=["uom", "conversion_factor"]
+            )
+
+            uom_map = {}
+
+            # Add child table UOMs
+            for row in uom_rows:
+                uom_map[row.uom] = row.conversion_factor
+
+            # Ensure stock UOM exists
+            if item.stock_uom not in uom_map:
+                uom_map[item.stock_uom] = 1
+
+            uoms = [
+                {
+                    "uom": uom,
+                    "conversion_factor": conversion_factor
+                }
+                for uom, conversion_factor in uom_map.items()
+            ]
+
+            result.append({
+                "item_code": item.item_code,
+                "item_name": item.item_name,
+                "image": item.image,
+                "item_group": item.item_group,
+                "stock_uom": item.stock_uom,
+                "base_rate": flt(item.base_rate),   # price per stock/base UOM
+                "uoms": uoms
+            })
+
+        return result
 
     except Exception as e:
-        frappe.log_error(frappe.get_traceback(), "Catalog SQL Error")
+        frappe.log_error(frappe.get_traceback(),
+                         "get_item_list with UOM Error")
         return {"error": str(e)}
-    
+
 # =========================================================
 # 📊 DASHBOARD API
 # =========================================================
+
 
 @frappe.whitelist()
 def get_my_dashboard_stats():
@@ -140,6 +174,7 @@ def get_my_dashboard_stats():
 # 🛒 ORDER PLACEMENT API
 # =========================================================
 
+
 @frappe.whitelist()
 def place_order(items, req_date=None, req_shift=None):
     try:
@@ -156,18 +191,19 @@ def place_order(items, req_date=None, req_shift=None):
         target_date = req_date if req_date else add_days(today(), 1)
         target_shift = req_shift if req_shift else "Morning"
 
+        # Check for existing draft order to update
         existing_so_name = frappe.db.get_value("Sales Order", {
             "customer": customer_id,
             "delivery_date": target_date,
-            "delivery_shift": target_shift, 
-            "docstatus": ["<", 2] 
+            "delivery_shift": target_shift,
+            "docstatus": ["<", 2]
         }, "name")
 
         if existing_so_name:
             so = frappe.get_doc("Sales Order", existing_so_name)
             if so.docstatus == 1:
                 return {"status": "error", "message": "Order already submitted."}
-            so.items = [] 
+            so.items = []  # Clear existing items to overwrite
         else:
             so = frappe.new_doc("Sales Order")
             so.customer = customer_id
@@ -177,12 +213,19 @@ def place_order(items, req_date=None, req_shift=None):
             so.order_type = "Sales"
             so.company = frappe.defaults.get_user_default("Company")
 
+        # --- UPDATED LOOP ---
         for row in cart_items:
             so.append("items", {
                 "item_code": row.get("item_code"),
                 "qty": row.get("qty"),
                 "delivery_date": target_date,
-                "rate": row.get("price", 0)
+
+                # 1. Map UOM (Crucial for inventory)
+                "uom": row.get("uom"),
+
+                # 2. Map Rate (Crucial for correct pricing)
+                # We use "rate" here because the App sends key "rate"
+                "rate": row.get("rate", 0)
             })
 
         so.save(ignore_permissions=True)
@@ -191,10 +234,10 @@ def place_order(items, req_date=None, req_shift=None):
     except Exception as e:
         frappe.log_error(f"Order Error: {str(e)}")
         return {"status": "error", "message": str(e)}
-
 # =========================================================
 # 📜 SALES ORDER LIST (UPDATED)
 # =========================================================
+
 
 @frappe.whitelist()
 def get_order_list(filter_type="Last 7 Days", start_date=None, end_date=None):
@@ -203,29 +246,31 @@ def get_order_list(filter_type="Last 7 Days", start_date=None, end_date=None):
     Default Filter: Last 7 Days
     """
     customer_id = get_logged_in_customer()
-    
+
     # 1. Get resolved dates (Defaults to Last 7 Days if not Custom)
     from_date, to_date = get_date_range(filter_type, start_date, end_date)
 
     orders = frappe.db.get_list("Sales Order",
-        filters={
-            "customer": customer_id,
-            "transaction_date": ["between", [from_date, to_date]],
-            "docstatus": ["!=", 2]
-        },
-        fields=["name", "transaction_date", "grand_total", "status", "delivery_date", "total_qty"],
-        order_by="transaction_date desc"
-    )
+                                filters={
+                                    "customer": customer_id,
+                                    "transaction_date": ["between", [from_date, to_date]],
+                                    "docstatus": ["!=", 2]
+                                },
+                                fields=["name", "transaction_date", "grand_total",
+                                        "status", "delivery_date", "total_qty"],
+                                order_by="transaction_date desc"
+                                )
     return orders
+
 
 @frappe.whitelist()
 def get_order_details(order_id):
     if not frappe.db.exists("Sales Order", order_id):
         frappe.throw("Order not found")
-    
+
     doc = frappe.get_doc("Sales Order", order_id)
     current_customer = get_logged_in_customer()
-    
+
     if doc.customer != current_customer:
         frappe.throw("Unauthorized access to this order")
 
@@ -249,6 +294,7 @@ def get_order_details(order_id):
 # 🧾 SALES INVOICE LIST (UPDATED)
 # =========================================================
 
+
 @frappe.whitelist()
 def get_invoice_list(filter_type="Last 7 Days", start_date=None, end_date=None):
     """
@@ -256,20 +302,22 @@ def get_invoice_list(filter_type="Last 7 Days", start_date=None, end_date=None):
     Default Filter: Last 7 Days
     """
     customer_id = get_logged_in_customer()
-    
+
     # 1. Get resolved dates (Defaults to Last 7 Days if not Custom)
     from_date, to_date = get_date_range(filter_type, start_date, end_date)
 
     invoices = frappe.db.get_list("Sales Invoice",
-        filters={
-            "customer": customer_id,
-            "posting_date": ["between", [from_date, to_date]],
-            "docstatus": 1
-        },
-        fields=["name", "posting_date", "grand_total", "outstanding_amount", "status"],
-        order_by="posting_date desc"
-    )
+                                  filters={
+                                      "customer": customer_id,
+                                      "posting_date": ["between", [from_date, to_date]],
+                                      "docstatus": 1
+                                  },
+                                  fields=["name", "posting_date", "grand_total",
+                                          "outstanding_amount", "status"],
+                                  order_by="posting_date desc"
+                                  )
     return invoices
+
 
 @frappe.whitelist()
 def get_invoice_details(invoice_id):
@@ -301,13 +349,14 @@ def get_invoice_details(invoice_id):
 # 📒 LEDGER REPORT
 # =========================================================
 
+
 @frappe.whitelist()
 def get_customer_ledger(filter_type="This Year", start_date=None, end_date=None, voucher_type=None):
     customer_id = get_logged_in_customer()
-    
+
     # 1. Get resolved dates
     from_date, to_date = get_date_range(filter_type, start_date, end_date)
-    
+
     # 2. Base Filters
     filters = {
         "party_type": "Customer",
@@ -321,16 +370,17 @@ def get_customer_ledger(filter_type="This Year", start_date=None, end_date=None,
         filters["voucher_type"] = voucher_type
     else:
         # Show Everything (Invoices + Payments), excluding internal tech entries
-        filters["voucher_type"] = ["not in", ["Payment Ledger Entry"]] 
+        filters["voucher_type"] = ["not in", ["Payment Ledger Entry"]]
 
     # 4. Fetch Data
     gl_entries = frappe.get_list("GL Entry",
-        filters=filters,
-        fields=["posting_date", "voucher_type", "voucher_no", "debit", "credit", "remarks"],
-        order_by="posting_date asc, creation asc",
-        ignore_permissions=True 
-    )
-    
+                                 filters=filters,
+                                 fields=["posting_date", "voucher_type",
+                                         "voucher_no", "debit", "credit", "remarks"],
+                                 order_by="posting_date asc, creation asc",
+                                 ignore_permissions=True
+                                 )
+
     # 5. Calculate Background Balance (Math only, no row added)
     opening_balance_data = frappe.db.sql("""
         SELECT SUM(debit - credit) as balance
@@ -340,12 +390,12 @@ def get_customer_ledger(filter_type="This Year", start_date=None, end_date=None,
         AND posting_date < %s
         AND is_cancelled = 0
     """, (customer_id, from_date), as_dict=True)
-    
+
     # We initialize the math here, but we DO NOT append a row to 'data'
     running_balance = opening_balance_data[0].balance or 0.0
-    
+
     data = []
-    
+
     # 6. Process Transactions
     for entry in gl_entries:
         running_balance += (entry.debit - entry.credit)
@@ -355,14 +405,15 @@ def get_customer_ledger(filter_type="This Year", start_date=None, end_date=None,
             "voucher_no": entry.voucher_no,
             "debit": entry.debit,
             "credit": entry.credit,
-            "balance": running_balance # This will now be mathematically correct
+            "balance": running_balance  # This will now be mathematically correct
         })
-        
+
     return data
 
 # =========================================================
 # 👤 PROFILE API
 # =========================================================
+
 
 @frappe.whitelist()
 def get_user_profile():
@@ -377,14 +428,15 @@ def get_user_profile():
             return {"error": "Not Logged In"}
 
         user_doc = frappe.get_doc("User", user)
-        
+
         customer_data = {}
         if customer_id:
-            customer_doc = frappe.db.get_value("Customer", customer_id, 
-                ["custom_starting_date_of_the_contract", "food_license_number", "food_license_validity"], 
-                as_dict=True
-            )
-            
+            customer_doc = frappe.db.get_value("Customer", customer_id,
+                                               ["custom_starting_date_of_the_contract",
+                                                   "food_license_number", "food_license_validity"],
+                                               as_dict=True
+                                               )
+
             if customer_doc:
                 customer_data = {
                     "contract_date": formatdate(customer_doc.get("custom_starting_date_of_the_contract")) if customer_doc.get("custom_starting_date_of_the_contract") else None,
