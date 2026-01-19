@@ -3,6 +3,7 @@ import json
 from frappe.utils import today, add_days, get_first_day, get_last_day, getdate, flt, formatdate
 from frappe.utils.nestedset import get_descendants_of
 from erpnext.accounts.party import get_dashboard_info
+from collections import defaultdict  # <--- THIS WAS MISSING
 
 # =========================================================
 # 🛠️ HELPER: RESOLVE CUSTOMER FROM LOGGED-IN USER
@@ -235,7 +236,7 @@ def get_my_dashboard_stats():
 
 
 @frappe.whitelist()
-def place_order(items, req_date=None, req_shift=None, po_no=None):  # Added po_no
+def place_order(items, req_date=None, req_shift=None, po_no=None):
     try:
         customer_id = get_logged_in_customer()
 
@@ -250,35 +251,34 @@ def place_order(items, req_date=None, req_shift=None, po_no=None):  # Added po_n
         target_date = req_date if req_date else add_days(today(), 1)
         target_shift = req_shift if req_shift else "Morning"
 
-        # Check for existing draft order
-        existing_so_name = frappe.db.get_value("Sales Order", {
+        # 1️⃣ VALIDATION CHECK
+        # Check if ANY order (Draft or Submitted) exists for this slot
+        existing_so = frappe.db.get_value("Sales Order", {
             "customer": customer_id,
             "delivery_date": target_date,
             "delivery_shift": target_shift,
-            "docstatus": ["<", 2]
-        }, "name")
+            "docstatus": ["<", 2] # 0 = Draft, 1 = Submitted
+        }, ["name", "docstatus"], as_dict=True)
 
-        if existing_so_name:
-            so = frappe.get_doc("Sales Order", existing_so_name)
-            if so.docstatus == 1:
-                return {"status": "error", "message": "Order already submitted."}
-            so.items = []
+        if existing_so:
+            # 🛑 STOP: Do not create/overwrite. Return Error.
+            status_msg = "Draft" if existing_so.docstatus == 0 else "Confirmed"
+            return {
+                "status": "error", 
+                "message": f"A {status_msg} Order ({existing_so.name}) already exists for {formatdate(target_date)} ({target_shift})."
+            }
 
-            # Update PO Number if provided (overwrites previous draft ID)
-            if po_no:
-                so.po_no = po_no
-        else:
-            so = frappe.new_doc("Sales Order")
-            so.customer = customer_id
-            so.transaction_date = today()
-            so.delivery_date = target_date
-            so.delivery_shift = target_shift
-            so.order_type = "Sales"
-            so.company = frappe.defaults.get_user_default("Company")
-
-            # Set the App ID here
-            if po_no:
-                so.po_no = po_no  # This saves to the standard "PO Number" field
+        # 2️⃣ CREATE NEW ORDER (Only if validation passes)
+        so = frappe.new_doc("Sales Order")
+        so.customer = customer_id
+        so.transaction_date = today()
+        so.delivery_date = target_date
+        so.delivery_shift = target_shift
+        so.order_type = "Sales"
+        so.company = frappe.defaults.get_user_default("Company")
+        
+        if po_no:
+            so.po_no = po_no 
 
         for row in cart_items:
             so.append("items", {
@@ -294,8 +294,7 @@ def place_order(items, req_date=None, req_shift=None, po_no=None):  # Added po_n
 
     except Exception as e:
         frappe.log_error(f"Order Error: {str(e)}")
-        return {"status": "error", "message": str(e)}
-    # =========================================================
+        return {"status": "error", "message": str(e)}    # =========================================================
 # 📜 SALES ORDER LIST (UPDATED)
 # =========================================================
 
