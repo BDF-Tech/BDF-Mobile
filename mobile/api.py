@@ -60,17 +60,34 @@ def get_date_range(filter_type, start_date=None, end_date=None):
     to_date = today_date
 
     return from_date, to_date
+
 # =========================================================
 # 📦 ITEM CATALOG API
 # =========================================================
-
-
 @frappe.whitelist()
 def get_item_list():
     try:
+        # 1️⃣ DYNAMIC PRICE LIST LOGIC
+        customer_id = get_logged_in_customer()
+        
+        # Priority A: Check if Customer has a specific Price List assigned
+        price_list = frappe.db.get_value("Customer", customer_id, "default_price_list")
+        
+        # Priority B: If not, check the Customer Group's default
+        if not price_list:
+            cust_group = frappe.db.get_value("Customer", customer_id, "customer_group")
+            if cust_group:
+                price_list = frappe.db.get_value("Customer Group", cust_group, "default_price_list")
+
+        # Priority C: Fallback to System Default (Selling Settings)
+        if not price_list:
+            price_list = frappe.db.get_value("Selling Settings", None, "selling_price_list") or "Standard Selling"
+
+        # ---------------------------------------------------------
+
         all_groups = []
 
-        # 1️⃣ Collect Item Groups
+        # 2️⃣ Collect Item Groups
         if frappe.db.exists("Item Group", "Finished Goods"):
             fg_children = get_descendants_of("Item Group", "Finished Goods")
             for g in fg_children:
@@ -88,7 +105,8 @@ def get_item_list():
 
         groups = tuple(set(all_groups))
 
-        # 2️⃣ Fetch Items with Base Rate
+        # 3️⃣ Fetch Items with DYNAMIC Price List
+        # We pass 'price_list' as a parameter to the query now
         items = frappe.db.sql("""
             SELECT
                 i.item_code,
@@ -100,17 +118,20 @@ def get_item_list():
             FROM `tabItem` i
             LEFT JOIN `tabItem Price` ip
                 ON ip.item_code = i.item_code
-                AND ip.price_list = 'All Franchise Price'
+                AND ip.price_list = %(price_list)s 
             WHERE
                 i.item_group IN %(groups)s
                 AND i.disabled = 0
                 AND i.is_sales_item = 1
             ORDER BY i.item_name ASC
-        """, {"groups": groups}, as_dict=True)
+        """, {
+            "groups": groups, 
+            "price_list": price_list  # <--- Passing the dynamic variable
+        }, as_dict=True)
 
         result = []
 
-        # 3️⃣ Attach UOMs with Deduplication
+        # 4️⃣ Attach UOMs (Logic remains same)
         for item in items:
             uom_rows = frappe.get_all(
                 "UOM Conversion Detail",
@@ -119,12 +140,9 @@ def get_item_list():
             )
 
             uom_map = {}
-
-            # Add child table UOMs
             for row in uom_rows:
                 uom_map[row.uom] = row.conversion_factor
 
-            # Ensure stock UOM exists
             if item.stock_uom not in uom_map:
                 uom_map[item.stock_uom] = 1
 
@@ -142,15 +160,15 @@ def get_item_list():
                 "image": item.image,
                 "item_group": item.item_group,
                 "stock_uom": item.stock_uom,
-                "base_rate": flt(item.base_rate),   # price per stock/base UOM
+                "base_rate": flt(item.base_rate),
+                "current_price_list": price_list, # Optional: Sent for debugging
                 "uoms": uoms
             })
 
         return result
 
     except Exception as e:
-        frappe.log_error(frappe.get_traceback(),
-                         "get_item_list with UOM Error")
+        frappe.log_error(frappe.get_traceback(), "get_item_list Error")
         return {"error": str(e)}
 
 # =========================================================
