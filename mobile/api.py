@@ -64,49 +64,56 @@ def get_date_range(filter_type, start_date=None, end_date=None):
 # =========================================================
 # 📦 ITEM CATALOG API
 # =========================================================
+
+
 @frappe.whitelist()
 def get_item_list():
     try:
-        # 1️⃣ DYNAMIC PRICE LIST LOGIC
+        # ==========================================
+        # 1️⃣ OPTIMIZED: Price List Logic
+        # ==========================================
         customer_id = get_logged_in_customer()
-        
-        # Priority A: Check if Customer has a specific Price List assigned
-        price_list = frappe.db.get_value("Customer", customer_id, "default_price_list")
-        
-        # Priority B: If not, check the Customer Group's default
+
+        # Fetch Customer & Group details in one go to reduce db calls
+        customer_details = frappe.db.get_value("Customer", customer_id, [
+                                               "default_price_list", "customer_group"], as_dict=True)
+
+        price_list = customer_details.get("default_price_list")
+
+        if not price_list and customer_details.get("customer_group"):
+            price_list = frappe.db.get_value(
+                "Customer Group", customer_details["customer_group"], "default_price_list")
+
         if not price_list:
-            cust_group = frappe.db.get_value("Customer", customer_id, "customer_group")
-            if cust_group:
-                price_list = frappe.db.get_value("Customer Group", cust_group, "default_price_list")
+            # Typically cached by Frappe, so this is fast
+            price_list = frappe.db.get_value(
+                "Selling Settings", None, "selling_price_list") or "Standard Selling"
 
-        # Priority C: Fallback to System Default (Selling Settings)
-        if not price_list:
-            price_list = frappe.db.get_value("Selling Settings", None, "selling_price_list") or "Standard Selling"
-
-        # ---------------------------------------------------------
-
+        # ==========================================
+        # 2️⃣ OPTIMIZED: Item Groups
+        # ==========================================
         all_groups = []
 
-        # 2️⃣ Collect Item Groups
+        # get_descendants_of is cached by Frappe, so this is okay
         if frappe.db.exists("Item Group", "Finished Goods"):
-            fg_children = get_descendants_of("Item Group", "Finished Goods")
-            for g in fg_children:
-                all_groups.append(g.get("name") if isinstance(g, dict) else g)
+            all_groups.extend(get_descendants_of(
+                "Item Group", "Finished Goods"))
             all_groups.append("Finished Goods")
 
         if frappe.db.exists("Item Group", "Trading"):
-            trading_children = get_descendants_of("Item Group", "Trading")
-            for g in trading_children:
-                all_groups.append(g.get("name") if isinstance(g, dict) else g)
+            all_groups.extend(get_descendants_of("Item Group", "Trading"))
             all_groups.append("Trading")
 
         if not all_groups:
             return []
 
-        groups = tuple(set(all_groups))
+        # Clean list of groups
+        groups = tuple(set(g.get("name") if isinstance(
+            g, dict) else g for g in all_groups))
 
-        # 3️⃣ Fetch Items with DYNAMIC Price List
-        # We pass 'price_list' as a parameter to the query now
+        # ==========================================
+        # 3️⃣ MAIN QUERY: Fetch Items
+        # ==========================================
         items = frappe.db.sql("""
             SELECT
                 i.item_code,
@@ -114,6 +121,7 @@ def get_item_list():
                 i.image,
                 i.item_group,
                 i.stock_uom,
+                i.sales_uom,
                 COALESCE(ip.price_list_rate, 0) AS base_rate
             FROM `tabItem` i
             LEFT JOIN `tabItem Price` ip
@@ -125,34 +133,69 @@ def get_item_list():
                 AND i.is_sales_item = 1
             ORDER BY i.item_name ASC
         """, {
-            "groups": groups, 
-            "price_list": price_list  # <--- Passing the dynamic variable
+            "groups": groups,
+            "price_list": price_list
         }, as_dict=True)
+
+        if not items:
+            return []
+
+        # ==========================================
+        # 4️⃣ OPTIMIZED: Bulk Fetch UOMs (The Fix)
+        # ==========================================
+
+        # Extract all item codes to fetch their UOMs in ONE query
+        item_codes = [item.item_code for item in items]
+
+        # Fetch ALL UOM conversion details for these items at once
+        all_uoms = frappe.db.get_all(
+            "UOM Conversion Detail",
+            filters={"parent": ["in", item_codes]},
+            fields=["parent", "uom", "conversion_factor"]
+        )
+
+        # Organize UOMs into a dictionary for fast lookup
+        # Structure: { 'ITEM-001': [ {uom: 'Box', conversion_factor: 10}, ... ] }
+        uom_lookup = defaultdict(list)
+        for u in all_uoms:
+            uom_lookup[u.parent].append(u)
 
         result = []
 
-        # 4️⃣ Attach UOMs (Logic remains same)
+        # ==========================================
+        # 5️⃣ PROCESSING: Map UOMs in Memory
+        # ==========================================
         for item in items:
-            uom_rows = frappe.get_all(
-                "UOM Conversion Detail",
-                filters={"parent": item.item_code},
-                fields=["uom", "conversion_factor"]
-            )
+            # Get UOMs for this specific item from our pre-fetched dictionary
+            # No database call happens here!
+            item_uom_rows = uom_lookup.get(item.item_code, [])
 
-            uom_map = {}
-            for row in uom_rows:
-                uom_map[row.uom] = row.conversion_factor
+            # Create a quick map for conversion factors
+            uom_map = {row.uom: row.conversion_factor for row in item_uom_rows}
 
+            # Always ensure Stock UOM is present
             if item.stock_uom not in uom_map:
-                uom_map[item.stock_uom] = 1
+                uom_map[item.stock_uom] = 1.0
 
-            uoms = [
-                {
-                    "uom": uom,
-                    "conversion_factor": conversion_factor
-                }
-                for uom, conversion_factor in uom_map.items()
-            ]
+            final_uoms_list = []
+
+            # --- 🛑 CONTROL LOGIC (Logic Preserved) 🛑 ---
+
+            # CASE A: Strict Default Sales UOM
+            if item.sales_uom:
+                factor = uom_map.get(item.sales_uom, 1.0)
+                final_uoms_list.append({
+                    "uom": item.sales_uom,
+                    "conversion_factor": factor
+                })
+
+            # CASE B: Show All UOMs
+            else:
+                for uom, factor in uom_map.items():
+                    final_uoms_list.append({
+                        "uom": uom,
+                        "conversion_factor": factor
+                    })
 
             result.append({
                 "item_code": item.item_code,
@@ -161,8 +204,7 @@ def get_item_list():
                 "item_group": item.item_group,
                 "stock_uom": item.stock_uom,
                 "base_rate": flt(item.base_rate),
-                "current_price_list": price_list, # Optional: Sent for debugging
-                "uoms": uoms
+                "uoms": final_uoms_list
             })
 
         return result
@@ -170,7 +212,6 @@ def get_item_list():
     except Exception as e:
         frappe.log_error(frappe.get_traceback(), "get_item_list Error")
         return {"error": str(e)}
-
 # =========================================================
 # 📊 DASHBOARD API
 # =========================================================
@@ -194,7 +235,7 @@ def get_my_dashboard_stats():
 
 
 @frappe.whitelist()
-def place_order(items, req_date=None, req_shift=None):
+def place_order(items, req_date=None, req_shift=None, po_no=None):  # Added po_no
     try:
         customer_id = get_logged_in_customer()
 
@@ -209,7 +250,7 @@ def place_order(items, req_date=None, req_shift=None):
         target_date = req_date if req_date else add_days(today(), 1)
         target_shift = req_shift if req_shift else "Morning"
 
-        # Check for existing draft order to update
+        # Check for existing draft order
         existing_so_name = frappe.db.get_value("Sales Order", {
             "customer": customer_id,
             "delivery_date": target_date,
@@ -221,7 +262,11 @@ def place_order(items, req_date=None, req_shift=None):
             so = frappe.get_doc("Sales Order", existing_so_name)
             if so.docstatus == 1:
                 return {"status": "error", "message": "Order already submitted."}
-            so.items = []  # Clear existing items to overwrite
+            so.items = []
+
+            # Update PO Number if provided (overwrites previous draft ID)
+            if po_no:
+                so.po_no = po_no
         else:
             so = frappe.new_doc("Sales Order")
             so.customer = customer_id
@@ -231,18 +276,16 @@ def place_order(items, req_date=None, req_shift=None):
             so.order_type = "Sales"
             so.company = frappe.defaults.get_user_default("Company")
 
-        # --- UPDATED LOOP ---
+            # Set the App ID here
+            if po_no:
+                so.po_no = po_no  # This saves to the standard "PO Number" field
+
         for row in cart_items:
             so.append("items", {
                 "item_code": row.get("item_code"),
                 "qty": row.get("qty"),
                 "delivery_date": target_date,
-
-                # 1. Map UOM (Crucial for inventory)
                 "uom": row.get("uom"),
-
-                # 2. Map Rate (Crucial for correct pricing)
-                # We use "rate" here because the App sends key "rate"
                 "rate": row.get("rate", 0)
             })
 
@@ -252,7 +295,7 @@ def place_order(items, req_date=None, req_shift=None):
     except Exception as e:
         frappe.log_error(f"Order Error: {str(e)}")
         return {"status": "error", "message": str(e)}
-# =========================================================
+    # =========================================================
 # 📜 SALES ORDER LIST (UPDATED)
 # =========================================================
 
