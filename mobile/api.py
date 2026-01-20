@@ -3,7 +3,7 @@ import json
 from frappe.utils import today, add_days, get_first_day, get_last_day, getdate, flt, formatdate
 from frappe.utils.nestedset import get_descendants_of
 from erpnext.accounts.party import get_dashboard_info
-from collections import defaultdict  # <--- THIS WAS MISSING
+from collections import defaultdict
 
 # =========================================================
 # 🛠️ HELPER: RESOLVE CUSTOMER FROM LOGGED-IN USER
@@ -70,133 +70,99 @@ def get_date_range(filter_type, start_date=None, end_date=None):
 @frappe.whitelist()
 def get_item_list():
     try:
-        # ==========================================
-        # 1️⃣ OPTIMIZED: Price List Logic
-        # ==========================================
+        # --- STEP 1: Get Customer ---
         customer_id = get_logged_in_customer()
 
-        # Fetch Customer & Group details in one go to reduce db calls
-        customer_details = frappe.db.get_value("Customer", customer_id, [
-                                               "default_price_list", "customer_group"], as_dict=True)
+        if not customer_id:
+            return {"error": f"No Customer linked to user {frappe.session.user}. Please contact support."}
+
+        # --- STEP 2: Get Price List ---
+        customer_details = frappe.db.get_value("Customer", customer_id,
+                                               ["default_price_list", "customer_group"], as_dict=True)
 
         price_list = customer_details.get("default_price_list")
-
         if not price_list and customer_details.get("customer_group"):
             price_list = frappe.db.get_value(
                 "Customer Group", customer_details["customer_group"], "default_price_list")
-
         if not price_list:
-            # Typically cached by Frappe, so this is fast
             price_list = frappe.db.get_value(
                 "Selling Settings", None, "selling_price_list") or "Standard Selling"
 
-        # ==========================================
-        # 2️⃣ OPTIMIZED: Item Groups
-        # ==========================================
-        all_groups = []
+        # --- STEP 3: Get Customer Catalog Rules (Strict Mode) ---
+        # Fetch only rows that are explicitly allowed
+        allowed_rows = frappe.db.get_all(
+            "Customer App Catalog",
+            filters={"parent": customer_id, "allow_on_app": 1},
+            fields=["item_code", "uom"]
+        )
 
-        # get_descendants_of is cached by Frappe, so this is okay
-        if frappe.db.exists("Item Group", "Finished Goods"):
-            all_groups.extend(get_descendants_of(
-                "Item Group", "Finished Goods"))
-            all_groups.append("Finished Goods")
-
-        if frappe.db.exists("Item Group", "Trading"):
-            all_groups.extend(get_descendants_of("Item Group", "Trading"))
-            all_groups.append("Trading")
-
-        if not all_groups:
+        # 🛑 SECURITY FIX: If table is empty, return NOTHING.
+        if not allowed_rows:
             return []
 
-        # Clean list of groups
-        groups = tuple(set(g.get("name") if isinstance(
-            g, dict) else g for g in all_groups))
+        # Create filter sets
+        allowed_item_codes = tuple(set(r.item_code for r in allowed_rows))
+        allowed_uom_map = set(f"{r.item_code}_{r.uom}" for r in allowed_rows)
 
-        # ==========================================
-        # 3️⃣ MAIN QUERY: Fetch Items
-        # ==========================================
+        # --- STEP 4: Main Item Query (Optimized) ---
+        # We now pass 'allowed_item_codes' to SQL.
+        # This prevents fetching items the customer isn't allowed to see.
         items = frappe.db.sql("""
             SELECT
-                i.item_code,
-                i.item_name,
-                i.image,
-                i.item_group,
-                i.stock_uom,
-                i.sales_uom,
+                i.item_code, i.item_name, i.image, i.item_group,
+                i.stock_uom, i.sales_uom,
                 COALESCE(ip.price_list_rate, 0) AS base_rate
             FROM `tabItem` i
             LEFT JOIN `tabItem Price` ip
-                ON ip.item_code = i.item_code
-                AND ip.price_list = %(price_list)s 
+                ON ip.item_code = i.item_code AND ip.price_list = %(price_list)s 
             WHERE
-                i.item_group IN %(groups)s
+                i.item_code IN %(allowed_items)s
+                AND i.is_sales_item = 1 
                 AND i.disabled = 0
-                AND i.is_sales_item = 1
             ORDER BY i.item_name ASC
         """, {
-            "groups": groups,
-            "price_list": price_list
+            "price_list": price_list,
+            "allowed_items": allowed_item_codes
         }, as_dict=True)
 
         if not items:
             return []
 
-        # ==========================================
-        # 4️⃣ OPTIMIZED: Bulk Fetch UOMs (The Fix)
-        # ==========================================
+        # --- STEP 5: Bulk Fetch UOMs ---
+        # We reuse the allowed list to make this query faster too
+        all_uoms = frappe.db.get_all("UOM Conversion Detail",
+                                     filters={"parent": [
+                                         "in", allowed_item_codes]},
+                                     fields=["parent", "uom",
+                                             "conversion_factor"]
+                                     )
 
-        # Extract all item codes to fetch their UOMs in ONE query
-        item_codes = [item.item_code for item in items]
-
-        # Fetch ALL UOM conversion details for these items at once
-        all_uoms = frappe.db.get_all(
-            "UOM Conversion Detail",
-            filters={"parent": ["in", item_codes]},
-            fields=["parent", "uom", "conversion_factor"]
-        )
-
-        # Organize UOMs into a dictionary for fast lookup
-        # Structure: { 'ITEM-001': [ {uom: 'Box', conversion_factor: 10}, ... ] }
         uom_lookup = defaultdict(list)
         for u in all_uoms:
             uom_lookup[u.parent].append(u)
 
         result = []
 
-        # ==========================================
-        # 5️⃣ PROCESSING: Map UOMs in Memory
-        # ==========================================
+        # --- STEP 6: Processing & Strict Filtering ---
         for item in items:
-            # Get UOMs for this specific item from our pre-fetched dictionary
-            # No database call happens here!
             item_uom_rows = uom_lookup.get(item.item_code, [])
-
-            # Create a quick map for conversion factors
             uom_map = {row.uom: row.conversion_factor for row in item_uom_rows}
 
-            # Always ensure Stock UOM is present
             if item.stock_uom not in uom_map:
                 uom_map[item.stock_uom] = 1.0
 
             final_uoms_list = []
 
-            # --- 🛑 CONTROL LOGIC (Logic Preserved) 🛑 ---
+            for uom, factor in uom_map.items():
+                # STRICT CHECK: Only add UOM if it exists in the 'allowed_uom_map'
+                key = f"{item.item_code}_{uom}"
+                if key in allowed_uom_map:
+                    final_uoms_list.append(
+                        {"uom": uom, "conversion_factor": factor})
 
-            # CASE A: Strict Default Sales UOM
-            if item.sales_uom:
-                factor = uom_map.get(item.sales_uom, 1.0)
-                final_uoms_list.append({
-                    "uom": item.sales_uom,
-                    "conversion_factor": factor
-                })
-
-            # CASE B: Show All UOMs
-            else:
-                for uom, factor in uom_map.items():
-                    final_uoms_list.append({
-                        "uom": uom,
-                        "conversion_factor": factor
-                    })
+            # If item has no valid UOMs allowed (e.g. they unchecked all UOMs), skip it
+            if not final_uoms_list:
+                continue
 
             result.append({
                 "item_code": item.item_code,
@@ -205,7 +171,8 @@ def get_item_list():
                 "item_group": item.item_group,
                 "stock_uom": item.stock_uom,
                 "base_rate": flt(item.base_rate),
-                "uoms": final_uoms_list
+                "uoms": final_uoms_list,
+                "price_list": price_list
             })
 
         return result
@@ -257,14 +224,14 @@ def place_order(items, req_date=None, req_shift=None, po_no=None):
             "customer": customer_id,
             "delivery_date": target_date,
             "delivery_shift": target_shift,
-            "docstatus": ["<", 2] # 0 = Draft, 1 = Submitted
+            "docstatus": ["<", 2]  # 0 = Draft, 1 = Submitted
         }, ["name", "docstatus"], as_dict=True)
 
         if existing_so:
             # 🛑 STOP: Do not create/overwrite. Return Error.
             status_msg = "Draft" if existing_so.docstatus == 0 else "Confirmed"
             return {
-                "status": "error", 
+                "status": "error",
                 "message": f"A {status_msg} Order ({existing_so.name}) already exists for {formatdate(target_date)} ({target_shift})."
             }
 
@@ -276,9 +243,9 @@ def place_order(items, req_date=None, req_shift=None, po_no=None):
         so.delivery_shift = target_shift
         so.order_type = "Sales"
         so.company = frappe.defaults.get_user_default("Company")
-        
+
         if po_no:
-            so.po_no = po_no 
+            so.po_no = po_no
 
         for row in cart_items:
             so.append("items", {
@@ -294,7 +261,8 @@ def place_order(items, req_date=None, req_shift=None, po_no=None):
 
     except Exception as e:
         frappe.log_error(f"Order Error: {str(e)}")
-        return {"status": "error", "message": str(e)}    # =========================================================
+        # =========================================================
+        return {"status": "error", "message": str(e)}
 # 📜 SALES ORDER LIST (UPDATED)
 # =========================================================
 
@@ -517,3 +485,48 @@ def get_user_profile():
     except Exception as e:
         frappe.log_error(f"Profile Error: {str(e)}")
         return {"error": str(e)}
+
+
+@frappe.whitelist()
+def fetch_customer_catalog(customer_id):
+    # 1. Check if the user has write access to Customer (Basic Security)
+    if not frappe.has_permission("Customer", "write"):
+        frappe.throw("You do not have permission to edit Customers.")
+
+    # 2. Fetch ALL Sales Items + Their UOMs in ONE fast SQL query
+    # We join Item and UOM Conversion Detail tables
+    data = frappe.db.sql("""
+        SELECT 
+            i.item_code, 
+            i.item_name, 
+            u.uom
+        FROM `tabItem` i
+        JOIN `tabUOM Conversion Detail` u ON u.parent = i.item_code
+        WHERE 
+            i.is_sales_item = 1 
+            AND i.disabled = 0
+        ORDER BY i.item_name ASC
+    """, as_dict=True)
+
+    if not data:
+        return "No items found"
+
+    # 3. Get the Customer Doc
+    doc = frappe.get_doc("Customer", customer_id)
+
+    # 4. Clear existing table
+    doc.set("custom_app_item_setting", [])
+
+    # 5. Fill the table with new data
+    for row in data:
+        doc.append("custom_app_item_setting", {
+            "item_code": row.item_code,
+            "item_name": row.item_name,
+            "uom": row.uom,
+            "enable": 1
+        })
+
+    # 6. Save the Customer (This applies the changes to the database)
+    doc.save(ignore_permissions=True)
+
+    return f"Successfully added {len(data)} rows to the catalog."
