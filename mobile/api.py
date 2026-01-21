@@ -42,7 +42,6 @@ def get_logged_in_customer():
 # 📅 HELPER: DATE FILTERS (UPDATED)
 # =========================================================
 
-
 def get_date_range(filter_type, start_date=None, end_date=None):
     """
     Logic: 
@@ -65,7 +64,6 @@ def get_date_range(filter_type, start_date=None, end_date=None):
 # =========================================================
 # 📦 ITEM CATALOG API
 # =========================================================
-
 
 @frappe.whitelist()
 def get_item_list():
@@ -184,7 +182,6 @@ def get_item_list():
 # 📊 DASHBOARD API
 # =========================================================
 
-
 @frappe.whitelist()
 def get_my_dashboard_stats():
     customer_id = get_logged_in_customer()
@@ -200,7 +197,6 @@ def get_my_dashboard_stats():
 # =========================================================
 # 🛒 ORDER PLACEMENT API
 # =========================================================
-
 
 @frappe.whitelist()
 def place_order(items, req_date=None, req_shift=None, po_no=None):
@@ -266,7 +262,6 @@ def place_order(items, req_date=None, req_shift=None, po_no=None):
 # 📜 SALES ORDER LIST (UPDATED)
 # =========================================================
 
-
 @frappe.whitelist()
 def get_order_list(filter_type="Last 7 Days", start_date=None, end_date=None):
     """
@@ -289,7 +284,6 @@ def get_order_list(filter_type="Last 7 Days", start_date=None, end_date=None):
                                 order_by="transaction_date desc"
                                 )
     return orders
-
 
 @frappe.whitelist()
 def get_order_details(order_id):
@@ -322,7 +316,6 @@ def get_order_details(order_id):
 # 🧾 SALES INVOICE LIST (UPDATED)
 # =========================================================
 
-
 @frappe.whitelist()
 def get_invoice_list(filter_type="Last 7 Days", start_date=None, end_date=None):
     """
@@ -345,7 +338,6 @@ def get_invoice_list(filter_type="Last 7 Days", start_date=None, end_date=None):
                                   order_by="posting_date desc"
                                   )
     return invoices
-
 
 @frappe.whitelist()
 def get_invoice_details(invoice_id):
@@ -376,7 +368,6 @@ def get_invoice_details(invoice_id):
 # =========================================================
 # 📒 LEDGER REPORT
 # =========================================================
-
 
 @frappe.whitelist()
 def get_customer_ledger(filter_type="This Year", start_date=None, end_date=None, voucher_type=None):
@@ -442,7 +433,6 @@ def get_customer_ledger(filter_type="This Year", start_date=None, end_date=None,
 # 👤 PROFILE API
 # =========================================================
 
-
 @frappe.whitelist()
 def get_user_profile():
     try:
@@ -486,19 +476,20 @@ def get_user_profile():
         frappe.log_error(f"Profile Error: {str(e)}")
         return {"error": str(e)}
 
-
 @frappe.whitelist()
 def fetch_customer_catalog(customer_id):
-    # 1. Check if the user has write access to Customer (Basic Security)
+    # 1. Security Check
     if not frappe.has_permission("Customer", "write"):
         frappe.throw("You do not have permission to edit Customers.")
 
-    # 2. Fetch ALL Sales Items + Their UOMs in ONE fast SQL query
-    # We join Item and UOM Conversion Detail tables
+    # 2. Fetch Items + UOMs + Sales/Stock Preference
+    # We added 'i.sales_uom' and 'i.stock_uom' to the query
     data = frappe.db.sql("""
         SELECT 
             i.item_code, 
             i.item_name, 
+            i.sales_uom,
+            i.stock_uom,
             u.uom
         FROM `tabItem` i
         JOIN `tabUOM Conversion Detail` u ON u.parent = i.item_code
@@ -509,7 +500,7 @@ def fetch_customer_catalog(customer_id):
     """, as_dict=True)
 
     if not data:
-        return "No items found"
+        return "No sales items found"
 
     # 3. Get the Customer Doc
     doc = frappe.get_doc("Customer", customer_id)
@@ -517,16 +508,31 @@ def fetch_customer_catalog(customer_id):
     # 4. Clear existing table
     doc.set("custom_app_item_setting", [])
 
-    # 5. Fill the table with new data
+    # 5. Fill the table with Smart Logic
+    enabled_count = 0
+    
     for row in data:
+        should_enable = 0
+        
+        # Priority 1: Exact match with Sales UOM
+        if row.sales_uom and row.uom == row.sales_uom:
+            should_enable = 1
+            
+        # Priority 2: If no Sales UOM defined, fallback to Stock UOM
+        elif not row.sales_uom and row.uom == row.stock_uom:
+            should_enable = 1
+            
         doc.append("custom_app_item_setting", {
             "item_code": row.item_code,
             "item_name": row.item_name,
             "uom": row.uom,
-            "enable": 1
+            "allow_on_app": should_enable  # 1 or 0 based on logic above
         })
+        
+        if should_enable:
+            enabled_count += 1
 
-    # 6. Save the Customer (This applies the changes to the database)
+    # 6. Save (bypassing permissions since we already checked write access above)
     doc.save(ignore_permissions=True)
 
-    return f"Successfully added {len(data)} rows to the catalog."
+    return f"Successfully fetched catalog. Auto-enabled {enabled_count} default UOMs."
