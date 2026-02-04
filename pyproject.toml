@@ -1,0 +1,11 @@
+[project]
+name = "mobile"
+description = "Mobile"
+authors = [
+  { name = "Quantbit", email = "pradip.jadhav@erpdata.in" }
+]
+requires-python = ">=3.10"
+dependencies = []
+
+[tool.frappe]
+app_name = "mobile"
