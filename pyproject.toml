@@ -1,5 +1,6 @@
 [project]
 name = "mobile"
+version = "0.0.1"
 description = "Mobile"
 authors = [
   { name = "Quantbit", email = "pradip.jadhav@erpdata.in" }
