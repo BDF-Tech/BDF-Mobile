@@ -478,6 +478,7 @@ def get_user_profile():
 
 @frappe.whitelist()
 def fetch_customer_catalog(customer_id):
+
     # 1. Security Check
     if not frappe.has_permission("Customer", "write"):
         frappe.throw("You do not have permission to edit Customers.")
