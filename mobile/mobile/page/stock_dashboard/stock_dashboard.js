@@ -2,13 +2,9 @@ frappe.pages['stock-dashboard'].on_page_load = function(wrapper) {
 
     var page = frappe.ui.make_app_page({
         parent: wrapper,
-        title: 'Production Inventory Hub',
+        title: 'Stock Dashboard',
         single_column: true
     });
-
-    // ==========================
-    // FRAPPE-NATIVE CSS
-    // ==========================
 
     $(`
     <style>
@@ -19,7 +15,6 @@ frappe.pages['stock-dashboard'].on_page_load = function(wrapper) {
         gap: 15px;
         margin: 20px 0;
     }
-
     .stat-card {
         background: var(--card-bg);
         border: 1px solid var(--border-color);
@@ -239,7 +234,7 @@ function refresh_data(page){
     );
 
     frappe.call({
-        method:"dairy.dairy.page.stock_dashboard.stock_dashboard.get_stock_data",
+        method:"mobile.mobile.page.stock_dashboard.stock_dashboard.get_stock_data",
         args:{
             warehouse:page.wh_f.get_value(),
             item_code:page.item_f.get_value(), // Passing the item filter value
