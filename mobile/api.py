@@ -4,6 +4,8 @@ from frappe.utils import today, add_days, get_first_day, get_last_day, getdate, 
 from frappe.utils.nestedset import get_descendants_of
 from erpnext.accounts.party import get_dashboard_info
 from collections import defaultdict
+from frappe.utils import flt, now_datetime
+
 
 # =========================================================
 # 🛠️ HELPER: RESOLVE CUSTOMER FROM LOGGED-IN USER
@@ -537,3 +539,13 @@ def fetch_customer_catalog(customer_id):
     doc.save(ignore_permissions=True)
 
     return f"Successfully fetched catalog. Auto-enabled {enabled_count} default UOMs."
+
+
+from mobile.mobile.doctype.tanker_weight_log.tanker_weight_log import capture_scale_data
+
+from mobile.mobile.doctype.tanker_weight_log.tanker_weight_log import capture_scale_data
+
+@frappe.whitelist(allow_guest=True)
+def s(v=None):
+    # Pass 'v' from the URL to your main function
+    return capture_scale_data(w=v)

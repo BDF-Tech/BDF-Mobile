@@ -6,16 +6,16 @@ class TankerWeightLog(Document):
     pass
 
 @frappe.whitelist(allow_guest=True)
-def capture_scale_data(stringnew=None):
+def capture_scale_data(w=None):
     """
     URL: http://bdf.test:8000/api/method/mobile.mobile.doctype.tanker_weight_log.tanker_weight_log.capture_scale_data
     """
-    if not stringnew:
+    if not w:
         return {"status": "error", "message": "No payload received"}
 
     try:
         # 1. Parsing
-        parts = stringnew.split('|')
+        parts = w.split('|')
         if len(parts) < 5:
             return {"status": "error", "message": "Malformed data string"}
 
@@ -39,7 +39,7 @@ def capture_scale_data(stringnew=None):
             "device": device_id,
             "weight": current_weight, 
             "status": data_status,
-            "raw_payload": stringnew
+            "raw_payload": w
         })
         log.insert(ignore_permissions=True)
         
