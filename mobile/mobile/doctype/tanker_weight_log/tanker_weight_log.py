@@ -7,9 +7,6 @@ class TankerWeightLog(Document):
 
 @frappe.whitelist(allow_guest=True)
 def capture_scale_data(w=None):
-    """
-    URL: http://bdf.test:8000/api/method/mobile.mobile.doctype.tanker_weight_log.tanker_weight_log.capture_scale_data
-    """
     if not w:
         return {"status": "error", "message": "No payload received"}
 
@@ -21,6 +18,7 @@ def capture_scale_data(w=None):
 
         device_id = parts[0].strip()
         data_status = parts[1].strip()
+        # Clean up the weight (handles extra spaces like in ' 03195.0')
         raw_weight = parts[4].strip()
 
         # 2. Validation from Master (Scale Device)
@@ -32,22 +30,25 @@ def capture_scale_data(w=None):
         if not device_data or not device_data.active:
             return {"status": "inactive", "message": "Device is deactivated"}
 
-        # 3. Create Log Entry
+        # 3. Create Log Entry with Server Time
+        current_server_time = now_datetime() # Capture exact server time
         current_weight = flt(raw_weight)
+        
         log = frappe.get_doc({
             "doctype": "Tanker Weight Log",
             "device": device_id,
             "weight": current_weight, 
             "status": data_status,
-            "raw_payload": w
+            "raw_payload": w,
+            "log_time": current_server_time  # Ensure you have this field in your DocType
         })
         log.insert(ignore_permissions=True)
         
         # 4. Update Last Ping on Master
-        frappe.db.set_value("Scale Device", device_id, "last_ping", now_datetime())
+        frappe.db.set_value("Scale Device", device_id, "last_ping", current_server_time)
 
         frappe.db.commit()
-        return "OK"
+        return {"message": "OK"} # Return as JSON for better API standards
 
     except Exception as e:
         frappe.db.rollback()

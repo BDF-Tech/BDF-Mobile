@@ -1,0 +1,104 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-03-11 17:08:14.040067",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "document_to_be_signed",
+  "signer_ref_id",
+  "signer_name",
+  "signer_email",
+  "signer_mobile_number",
+  "sequence",
+  "page_number",
+  "appearance",
+  "signature_type",
+  "esign_type",
+  "trigger_esign_request"
+ ],
+ "fields": [
+  {
+   "fieldname": "signer_ref_id",
+   "fieldtype": "Data",
+   "label": "Signer ref id"
+  },
+  {
+   "fieldname": "signer_name",
+   "fieldtype": "Data",
+   "label": "Signer Name"
+  },
+  {
+   "fieldname": "signer_email",
+   "fieldtype": "Data",
+   "label": "Signer Email"
+  },
+  {
+   "fieldname": "signer_mobile_number",
+   "fieldtype": "Data",
+   "label": "Signer Mobile Number"
+  },
+  {
+   "default": "1",
+   "fieldname": "sequence",
+   "fieldtype": "Int",
+   "label": "Sequence",
+   "read_only": 1
+  },
+  {
+   "fieldname": "page_number",
+   "fieldtype": "Select",
+   "label": "Page Number",
+   "options": "all"
+  },
+  {
+   "fieldname": "appearance",
+   "fieldtype": "Select",
+   "label": "Appearance",
+   "options": "bottom-left\nbottom-right\ntop-left\ntop-right"
+  },
+  {
+   "fieldname": "signature_type",
+   "fieldtype": "Select",
+   "label": "Signature type",
+   "options": "aadhaar",
+   "read_only": 1
+  },
+  {
+   "default": "otp",
+   "fieldname": "esign_type",
+   "fieldtype": "Data",
+   "label": "esign type",
+   "read_only": 1
+  },
+  {
+   "fieldname": "trigger_esign_request",
+   "fieldtype": "Select",
+   "label": "Trigger esign request",
+   "options": "true\nfalse",
+   "read_only": 1
+  },
+  {
+   "fieldname": "document_to_be_signed",
+   "fieldtype": "Data",
+   "label": "Document to be signed",
+   "read_only": 1
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-03-11 18:36:49.957557",
+ "modified_by": "Administrator",
+ "module": "Mobile",
+ "name": "Signers Info",
+ "owner": "Administrator",
+ "permissions": [],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}
