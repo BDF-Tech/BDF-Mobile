@@ -7,6 +7,7 @@
  "field_order": [
   "device",
   "weight",
+  "log_time",
   "column_break_mocf",
   "status",
   "raw_payload"
@@ -16,8 +17,7 @@
    "fieldname": "device",
    "fieldtype": "Link",
    "label": "Device",
-   "options": "Scale Device",
-   "unique": 0
+   "options": "Scale Device"
   },
   {
    "fieldname": "weight",
@@ -37,12 +37,17 @@
    "fieldname": "raw_payload",
    "fieldtype": "Code",
    "label": "Raw Payload"
+  },
+  {
+   "fieldname": "log_time",
+   "fieldtype": "Datetime",
+   "label": "Log Time"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-02-25 17:28:26.192698",
+ "modified": "2026-03-18 17:23:39.449363",
  "modified_by": "Administrator",
  "module": "Mobile",
  "name": "Tanker Weight Log",

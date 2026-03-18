@@ -1,0 +1,403 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-03-11 15:41:01.290312",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "stamping_details_tab",
+  "choose_actio",
+  "request_sent_section",
+  "reference_id",
+  "content",
+  "convert_pdf",
+  "stamp_state",
+  "stamp_amount",
+  "document_category",
+  "stamp_duty_paid_by",
+  "second_party_name",
+  "column_break_cvax",
+  "first_party_name",
+  "street_address",
+  "city",
+  "state",
+  "pincode",
+  "country",
+  "first_party_entity_type",
+  "first_party_id_type",
+  "first_party_id_number",
+  "custom_fields_section",
+  "agreement_date",
+  "outlet_name",
+  "outlet_place",
+  "second_party_aadhaar_number",
+  "second_party_pan_number",
+  "second_party_gst_number",
+  "second_party_deposit_amount",
+  "secound_party_bank_account_number",
+  "transaction_number",
+  "prepaid_balance_amount",
+  "section_break_foqg",
+  "amended_from",
+  "e_sign_details_tab",
+  "reference_id_sign",
+  "document_title",
+  "reference_doc_id",
+  "column_break_rwno",
+  "content_type",
+  "signature_sequence",
+  "signers_info_section",
+  "signer_info_table",
+  "api_call_back_tab",
+  "request_body_stamping",
+  "response_body_stamping",
+  "full_response",
+  "request_content",
+  "only_content",
+  "column_break_xmec",
+  "request_body",
+  "response_body"
+ ],
+ "fields": [
+  {
+   "fieldname": "section_break_foqg",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "amended_from",
+   "fieldtype": "Link",
+   "label": "Amended From",
+   "no_copy": 1,
+   "options": "E stamping and signing",
+   "print_hide": 1,
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "reference_id",
+   "fieldtype": "Data",
+   "label": "Reference ID"
+  },
+  {
+   "default": "CG",
+   "fieldname": "stamp_state",
+   "fieldtype": "Data",
+   "label": "Stamp State",
+   "read_only": 1
+  },
+  {
+   "fieldname": "stamp_amount",
+   "fieldtype": "Int",
+   "label": "Stamp Amount"
+  },
+  {
+   "fieldname": "document_category",
+   "fieldtype": "Select",
+   "label": "Document Category",
+   "options": "1\n186"
+  },
+  {
+   "default": "First Party",
+   "fieldname": "stamp_duty_paid_by",
+   "fieldtype": "Data",
+   "label": "Stamp Duty Paid By",
+   "read_only": 1
+  },
+  {
+   "fieldname": "content",
+   "fieldtype": "Attach",
+   "label": "Upload PDF"
+  },
+  {
+   "fieldname": "column_break_cvax",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "BASTAR DAIRY FARM PRIVATE LIMITED",
+   "fieldname": "first_party_name",
+   "fieldtype": "Data",
+   "label": "First Party Name",
+   "read_only": 1
+  },
+  {
+   "default": "BDF PVT LTD BALAJI WARD",
+   "fieldname": "street_address",
+   "fieldtype": "Data",
+   "label": "Street Address",
+   "read_only": 1
+  },
+  {
+   "default": "Jagdalpur",
+   "fieldname": "city",
+   "fieldtype": "Data",
+   "label": "City",
+   "read_only": 1
+  },
+  {
+   "default": "CG",
+   "fieldname": "state",
+   "fieldtype": "Data",
+   "label": "State",
+   "read_only": 1
+  },
+  {
+   "default": "494001",
+   "fieldname": "pincode",
+   "fieldtype": "Data",
+   "label": "Pincode",
+   "read_only": 1
+  },
+  {
+   "default": "India",
+   "fieldname": "country",
+   "fieldtype": "Data",
+   "label": "Country",
+   "read_only": 1
+  },
+  {
+   "default": "Organization",
+   "fieldname": "first_party_entity_type",
+   "fieldtype": "Data",
+   "label": "First party entity type",
+   "read_only": 1
+  },
+  {
+   "default": "PAN",
+   "fieldname": "first_party_id_type",
+   "fieldtype": "Data",
+   "label": "First party id type",
+   "read_only": 1
+  },
+  {
+   "default": "ABCDE1234F",
+   "fieldname": "first_party_id_number",
+   "fieldtype": "Data",
+   "label": "First party id number",
+   "read_only": 1
+  },
+  {
+   "fieldname": "second_party_name",
+   "fieldtype": "Data",
+   "label": "Second party name"
+  },
+  {
+   "fieldname": "full_response",
+   "fieldtype": "Code",
+   "label": "Full Response",
+   "read_only": 1
+  },
+  {
+   "fieldname": "only_content",
+   "fieldtype": "Code",
+   "label": "Only Content",
+   "read_only": 1
+  },
+  {
+   "fieldname": "request_sent_section",
+   "fieldtype": "Section Break",
+   "label": "Request Sent"
+  },
+  {
+   "fieldname": "stamping_details_tab",
+   "fieldtype": "Tab Break",
+   "label": "Stamping Details"
+  },
+  {
+   "fieldname": "e_sign_details_tab",
+   "fieldtype": "Tab Break",
+   "label": "E sign Details"
+  },
+  {
+   "fieldname": "reference_id_sign",
+   "fieldtype": "Data",
+   "label": "Reference id sign"
+  },
+  {
+   "fieldname": "convert_pdf",
+   "fieldtype": "Button",
+   "label": "Convert PDF"
+  },
+  {
+   "fieldname": "request_content",
+   "fieldtype": "Code",
+   "label": "Request Content",
+   "read_only": 1
+  },
+  {
+   "fieldname": "document_title",
+   "fieldtype": "Select",
+   "label": "Document Title",
+   "options": "Rent Agreement\nLease Agreement"
+  },
+  {
+   "fieldname": "reference_doc_id",
+   "fieldtype": "Data",
+   "label": "Reference doc id"
+  },
+  {
+   "fieldname": "column_break_rwno",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "content_type",
+   "fieldtype": "Select",
+   "label": "Content Type",
+   "options": "pdf\ntemplate"
+  },
+  {
+   "fieldname": "signature_sequence",
+   "fieldtype": "Select",
+   "label": "Signature Sequence",
+   "options": "parallel"
+  },
+  {
+   "fieldname": "signers_info_section",
+   "fieldtype": "Section Break",
+   "label": "Signers Info"
+  },
+  {
+   "fieldname": "signer_info_table",
+   "fieldtype": "Table",
+   "label": "Signer Info table",
+   "options": "Signers Info"
+  },
+  {
+   "fieldname": "api_call_back_tab",
+   "fieldtype": "Tab Break",
+   "label": "Api Call back"
+  },
+  {
+   "fieldname": "request_body",
+   "fieldtype": "Code",
+   "label": "request body "
+  },
+  {
+   "fieldname": "response_body",
+   "fieldtype": "Code",
+   "label": "response body"
+  },
+  {
+   "fieldname": "column_break_xmec",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "request_body_stamping",
+   "fieldtype": "Code",
+   "label": "Request Body Stamping",
+   "read_only": 1
+  },
+  {
+   "fieldname": "response_body_stamping",
+   "fieldtype": "Code",
+   "label": "Response Body Stamping",
+   "read_only": 1
+  },
+  {
+   "fieldname": "custom_fields_section",
+   "fieldtype": "Section Break",
+   "label": "Custom Fields"
+  },
+  {
+   "fieldname": "agreement_date",
+   "fieldtype": "Date",
+   "label": "Agreement Date"
+  },
+  {
+   "fieldname": "outlet_name",
+   "fieldtype": "Data",
+   "label": "Outlet Name"
+  },
+  {
+   "fieldname": "outlet_place",
+   "fieldtype": "Data",
+   "label": "Outlet Place"
+  },
+  {
+   "fieldname": "second_party_aadhaar_number",
+   "fieldtype": "Int",
+   "label": "Second Party Aadhaar Number"
+  },
+  {
+   "fieldname": "second_party_pan_number",
+   "fieldtype": "Data",
+   "label": "Second Party Pan Number"
+  },
+  {
+   "fieldname": "second_party_gst_number",
+   "fieldtype": "Data",
+   "label": "Second Party GST Number"
+  },
+  {
+   "fieldname": "second_party_deposit_amount",
+   "fieldtype": "Currency",
+   "label": "Second Party Deposit Amount"
+  },
+  {
+   "fieldname": "secound_party_bank_account_number",
+   "fieldtype": "Data",
+   "label": "Secound Party Bank Account Number"
+  },
+  {
+   "fieldname": "transaction_number",
+   "fieldtype": "Data",
+   "label": "Transaction Number"
+  },
+  {
+   "fieldname": "prepaid_balance_amount",
+   "fieldtype": "Currency",
+   "label": "Prepaid Balance Amount"
+  },
+  {
+   "fieldname": "choose_actio",
+   "fieldtype": "Select",
+   "label": "Choose Action",
+   "options": "Stamping and signing\nsigning"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "is_submittable": 1,
+ "links": [],
+ "modified": "2026-03-17 13:16:49.182988",
+ "modified_by": "Administrator",
+ "module": "Mobile",
+ "name": "E stamping and signing",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "submit": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [
+  {
+   "color": "Gray",
+   "title": "Draft"
+  },
+  {
+   "color": "Yellow",
+   "title": "Stamping"
+  },
+  {
+   "color": "Red",
+   "title": "Signing"
+  },
+  {
+   "color": "Blue",
+   "title": "Submitted"
+  }
+ ]
+}

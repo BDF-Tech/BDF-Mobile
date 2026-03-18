@@ -4,17 +4,21 @@ import frappe
 def execute(filters=None):
 
     columns = [
-        {"label": "Stock Entry", "fieldname": "stock_entry", "fieldtype": "Link", "options": "Stock Entry", "width": 180},
+        {"label": "Stock Entry", "fieldname": "stock_entry", "fieldtype": "Link", "options": "Stock Entry", "width": 200},
         {"label": "Date", "fieldname": "date", "fieldtype": "Date", "width": 120},
         {"label": "Time", "fieldname": "posting_time", "fieldtype": "Time", "width": 100},
-        
-        {"label": "Finished Good", "fieldname": "fg_item", "fieldtype": "Data", "width": 220},
-        {"label": "Raw Material", "fieldname": "rm_item", "fieldtype": "Data", "width": 220},
+        {"label": "Finished Good", "fieldname": "fg_item", "fieldtype": "Data", "width": 180},
+        {"label": "Raw Material", "fieldname": "rm_item", "fieldtype": "Data", "width": 210},
+        {"label": "UOM", "fieldname": "uom", "fieldtype": "Data", "width": 80},
         {"label": "Qty", "fieldname": "qty", "fieldtype": "Float", "width": 120},
         {"label": "Handling Loss Qty", "fieldname": "custom_handling_loss_qty", "fieldtype": "Float", "width": 150},
     ]
 
     data = []
+
+    # Warehouses for stages
+    SFG_WH = "Production Cold Room - BDF"
+    FG_WH = "Dispatch Cold Room - BDF"
 
     stock_entries = frappe.get_all(
         "Stock Entry",
@@ -38,10 +42,12 @@ def execute(filters=None):
             "qty",
             "t_warehouse",
             "s_warehouse",
-            "custom_handling_loss_qty"
+            "custom_handling_loss_qty",
+            "uom"
         ]
     )
 
+    # Group items by Stock Entry
     items_by_entry = {}
 
     for item in items:
@@ -57,6 +63,14 @@ def execute(filters=None):
 
             if item.t_warehouse:
 
+                stage = filters.get("product_stage")
+
+                if stage == "Semi Finished" and item.t_warehouse != SFG_WH:
+                    continue
+
+                if stage == "Finished" and item.t_warehouse != FG_WH:
+                    continue
+
                 fg_row_name = f"{item.item_code} / {item.item_name}"
 
                 row = {
@@ -65,26 +79,32 @@ def execute(filters=None):
                     "stock_entry": entry.name,
                     "fg_item": fg_row_name,
                     "qty": item.qty,
+                    "custom_handling_loss_qty": item.custom_handling_loss_qty,
+                    "uom": item.uom,
                     "indent": 0,
                     "parent": None
                 }
 
                 data.append(row)
 
-        for item in entry_items:
+        # Add raw materials under FG
+        if fg_row_name:
 
-            if item.s_warehouse:
+            for item in entry_items:
 
-                row_rm = {
-                    "date": entry.posting_date,
-                    "posting_time": entry.posting_time,
-                    "rm_item": f"{item.item_code} / {item.item_name}",
-                    "qty": item.qty,
-                    "custom_handling_loss_qty": item.custom_handling_loss_qty,
-                    "indent": 1,
-                    "parent": fg_row_name
-                }
+                if item.s_warehouse:
 
-                data.append(row_rm)
+                    row_rm = {
+                        "date": entry.posting_date,
+                        "posting_time": entry.posting_time,
+                        "rm_item": f"{item.item_code} / {item.item_name}",
+                        "qty": item.qty,
+                        "custom_handling_loss_qty": item.custom_handling_loss_qty,
+                        "uom": item.uom,
+                        "indent": 1,
+                        "parent": fg_row_name
+                    }
+
+                    data.append(row_rm)
 
     return columns, data
