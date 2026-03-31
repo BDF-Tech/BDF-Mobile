@@ -1,5 +1,7 @@
 frappe.ui.form.on('E stamping and signing', {
+
     refresh: function(frm) {
+
         const scroll_fields = [
             'only_content', 'request_content', 'request_body', 
             'response_body', 'request_body_stamping', 
@@ -14,15 +16,71 @@ frappe.ui.form.on('E stamping and signing', {
             }
         });
 
+        // ✅ Apply UI mode (tabs + buttons)
+        frm.events.apply_mode(frm);
+    },
+
+    // 🔥 TRIGGER ON FIELD CHANGE (INSTANT)
+    choose_actio: function(frm) {
+        frm.events.apply_mode(frm);
+    },
+
+    // 🔥 MAIN CONTROLLER (TABS + BUTTONS)
+    apply_mode: function(frm) {
+
+        // -------------------------
+        // ✅ TAB LOGIC (STABLE)
+        // -------------------------
+        setTimeout(() => {
+
+            let stamping_tab = frm.$wrapper.find('[data-fieldname="stamping_details_tab"]').closest('.tab-pane');
+            let stamping_btn = frm.$wrapper.find('.nav-link[data-fieldname="stamping_details_tab"]');
+
+            // RESET FIRST (IMPORTANT)
+            stamping_tab.show();
+            stamping_btn.show();
+
+            if (frm.doc.choose_actio === "signing") {
+                stamping_tab.hide();
+                stamping_btn.hide();
+
+                // 👉 move to signing tab
+                frm.set_active_tab('e_sign_details_tab');
+            }
+
+        }, 100);
+
+        // -------------------------
+        // ✅ BUTTON LOGIC
+        // -------------------------
+        frm.events.setup_buttons(frm);
+    },
+
+    // 🔥 BUTTON CONTROLLER
+    setup_buttons: function(frm) {
+
         frm.clear_custom_buttons();
 
-        if (frm.doc.request_content && !frm.doc.only_content && frm.doc.docstatus === 0) {
+        if (frm.doc.docstatus !== 0) return;
+
+        // ✅ ONLY SIGNING MODE
+        if (frm.doc.choose_actio === "signing") {
+
+            frm.add_custom_button(__('Call E-Sign API'), function() {
+                frm.trigger('execute_esign');
+            }, __("Actions")).addClass('btn-primary');
+
+            return;
+        }
+
+        // ✅ STAMPING + SIGNING MODE (YOUR ORIGINAL LOGIC PRESERVED)
+        if (frm.doc.request_content && !frm.doc.only_content) {
             frm.add_custom_button(__('Call Stamping API'), function() {
                 frm.trigger('execute_stamping');
             }, __("Actions"));
         }
 
-        if (frm.doc.only_content && frm.doc.docstatus === 0) {
+        if (frm.doc.only_content) {
             frm.add_custom_button(__('Call E-Sign API'), function() {
                 frm.trigger('execute_esign');
             }, __("Actions")).addClass('btn-primary');
@@ -49,7 +107,6 @@ frappe.ui.form.on('E stamping and signing', {
             freeze: true,
             callback: (r) => {
                 if (r.message) {
-                    // Update UI fields directly
                     frm.set_value('request_body_stamping', r.message.request);
                     frm.set_value('response_body_stamping', r.message.response);
 
@@ -59,6 +116,10 @@ frappe.ui.form.on('E stamping and signing', {
                             indicator: 'green',
                             message: __('Stamping done proceed for esign')
                         });
+
+                        // 🔥 Refresh buttons after stamping
+                        frm.events.setup_buttons(frm);
+
                     } else {
                         frappe.msgprint({
                             title: __('Stamping Failed'),
@@ -66,7 +127,6 @@ frappe.ui.form.on('E stamping and signing', {
                             message: __(r.message.error || "Unknown Error")
                         });
                     }
-                    // Do NOT reload_doc here to keep the field values visible
                 }
             }
         });
@@ -84,7 +144,6 @@ frappe.ui.form.on('E stamping and signing', {
                 freeze: true,
                 callback: function(r) {
                     if (r.message) {
-                        // Set values so they appear in the text areas
                         frm.set_value('request_body', r.message.request);
                         frm.set_value('response_body', r.message.response);
                         
@@ -108,10 +167,26 @@ frappe.ui.form.on('E stamping and signing', {
     }
 });
 
+
 frappe.ui.form.on('Signers Info', {
     signer_info_table_add: function(frm, cdt, cdn) {
         if (frm.doc.reference_doc_id) {
             frappe.model.set_value(cdt, cdn, 'document_to_be_signed', frm.doc.reference_doc_id);
+        }
+    }
+});
+
+frappe.ui.form.on('E stamping and signing', {
+    category_of_agreement: function(frm) {
+        // Triggered whenever 'category_of_agreement' is changed
+        if (frm.doc.category_of_agreement) {
+            
+            frm.set_value('document_category', frm.doc.category_of_agreement);
+            
+             frm.set_value('document_title', frm.doc.category_of_agreement);
+            
+            frm.refresh_field('document_category');
+            frm.refresh_field('document_title');
         }
     }
 });

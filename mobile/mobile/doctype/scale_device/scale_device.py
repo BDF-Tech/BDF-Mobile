@@ -6,22 +6,31 @@ class ScaleDevice(Document):
     pass
 
 def execute_dynamic_cleanup():
-    """
-    This is called by the scheduler. It looks at 'retention_days' for each scale.
-    """
-    try:
-        devices = frappe.get_all("Scale Device", fields=["name", "retention_days"])
-        for d in devices:
-            keep_days = d.retention_days if d.retention_days else 3
-            threshold_date = add_days(now_datetime(), -keep_days)
-            
-            # Delete logs for this specific device only
-            frappe.db.sql("""
-                DELETE FROM `tabTanker Weight Log` 
-                WHERE device = %s 
-                AND creation < %s
-            """, (d.name, threshold_date))
-            
-        frappe.db.commit()
-    except Exception:
-        frappe.log_error(frappe.get_traceback(), "Scale Cleanup Error")
+    print("🔥 FUNCTION STARTED")
+
+    devices = frappe.get_all("Scale Device", fields=["name", "retention_days"])
+    print("Devices:", devices)
+
+    for d in devices:
+        print("👉 Device:", d.name)
+
+        keep_days = d.retention_days if d.retention_days is not None else 3
+        print("Keep Days:", keep_days)
+
+        threshold_date = add_days(now_datetime(), -keep_days)
+        print("Threshold:", threshold_date)
+
+        logs = frappe.db.sql("""
+            SELECT name FROM `tabTanker Weight Log`
+            WHERE device = %s AND creation < %s
+        """, (d.name, threshold_date), as_dict=True)
+
+        print("Logs Found:", len(logs))
+
+        frappe.db.sql("""
+            DELETE FROM `tabTanker Weight Log`
+            WHERE device = %s AND creation < %s
+        """, (d.name, threshold_date))
+
+    frappe.db.commit()
+    print("✅ DONE")

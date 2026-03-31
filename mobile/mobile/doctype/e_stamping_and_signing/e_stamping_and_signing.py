@@ -3,6 +3,7 @@ import requests
 import json
 import base64
 from frappe.model.document import Document
+import uuid
 
 # GLOBAL CONFIGURATION
 STAMP_CONFIG = {
@@ -37,13 +38,21 @@ class Estampingandsigning(Document):
 
     @frappe.whitelist()
     def call_stamping_api(self):
+        category_map = {
+        "Branch Agreement": "1",
+        "Shop Agreement": "186"
+    }
+
+    # 2. Get the specific code, defaulting to the original value if not in the map
+    # (Using .get ensures the code doesn't crash if the field is empty)
+        api_category_code = category_map.get(self.document_category, self.document_category)
         payload = {
             "reference_id": self.reference_id,
             "content": self.request_content,
             "force_sync": "true",
             "stamp_state": self.stamp_state,
             "stamp_amount": [str(self.stamp_amount)],
-            "document_category": [str(self.document_category)],
+            "document_category": [str(api_category_code)],
             "stamp_duty_paid_by": self.stamp_duty_paid_by,
             "first_party_name": self.first_party_name,
             "first_party_address": {
@@ -99,52 +108,128 @@ class Estampingandsigning(Document):
     def call_esign_api(self):
         signers_list = []
         for d in self.signer_info_table:
-            signers_list.append({
-                "document_to_be_signed": d.document_to_be_signed,
-                "signer_ref_id": d.signer_ref_id,
-                "signer_name": d.signer_name,
-                "signer_email": d.signer_email,
-                "signer_mobile": str(d.signer_mobile_number),
-                "sequence": int(d.sequence),
-                "page_number": d.page_number or "all",
-                "signer_position": {"appearance": d.appearance or "bottom-right"},
-                "signature_type": d.signature_type or "aadhaar",
-                "esign_type": d.esign_type or "otp",
-                "trigger_esign_request": d.trigger_esign_request or "true"
-            })
-
-        payload = {
-            "docket_title": self.document_title or "E-Stamping and Signing",
-            "reference_id": self.reference_id_sign,
-            "documents": [{
-                "reference_doc_id": self.reference_doc_id,
-                "content_type": self.content_type or "pdf",
-                "content": self.only_content,
-                "signature_sequence": self.signature_sequence or "parallel"
-            }],
-            "signers_info": signers_list
+        # 1. Base Signer Information
+            signer_data = {
+            "document_to_be_signed": d.document_to_be_signed or "DOC1",
+            "signer_ref_id": d.signer_ref_id,
+            "signer_name": d.signer_name,
+            "signer_email": d.signer_email,
+            "signer_mobile": str(d.signer_mobile_number),
+            "sequence": int(d.sequence or 1),
+            "signature_type": d.signature_type or "aadhaar",
+            "esign_type": d.esign_type or "otp",
+            "trigger_esign_request": d.trigger_esign_request or "true"
         }
 
-        req_json = json.dumps(payload, indent=2)
+        # Capture the dynamic input from the 'page_number' Data field
+        # We convert to string to ensure the JSON handles it correctly
+            user_page = str(d.page_number) if d.page_number else "1"
 
+        # 2. Conditional Logic for Positions & Dynamic Pages
+            if d.type_of_signer == "First Party":
+                signer_data["page_number"] = "all"
+                signer_data["signer_position"] = {
+                "appearance": [
+                    {
+                        "x1": 40, "y1": 11.65, "x2": 161, "y2": 71.65
+                    }
+                ]
+            }
+
+            elif d.type_of_signer == "Second Party":
+                signer_data["page_number"] = "all"
+                signer_data["signer_position"] = {
+                "appearance": [
+                    {
+                        "x1": 302,"y1": 11.65,"x2": 423,"y2": 71.65
+                    }
+                ]
+            }
+
+            elif d.type_of_signer == "Witness 1":
+                signer_data["page_number"] = "all"
+                signer_data["signer_position"] = {
+                "page": [user_page],  # Dynamic page from user input
+                "appearance": [
+                    {
+                        "id": "_a7e1z830r",
+                        "x1": 82, "y1": 164, "x2": 192, "y2": 204,
+                        "page_height": 842.04, "page_width": 595.32,
+                        "page": user_page  # Matches the outer page array
+                    }
+                ]
+            }
+
+            elif d.type_of_signer == "Witness 2":
+                signer_data["page_number"] = "all"
+                signer_data["signer_position"] = {
+                "page": [user_page],  # Dynamic page from user input
+                "appearance": [
+                    {
+                        "id": "_ril0b38h6",
+                        "x1": 85, "y1": 235, "x2": 195, "y2": 275,
+                        "page_height": 842.04, "page_width": 595.32,
+                        "page": user_page  # Matches the outer page array
+                    }
+                ]
+            }
+        
+            signers_list.append(signer_data)
+        content_data = self.request_content if self.choose_actio == "signing" else self.only_content
+        payload = {
+        "docket_title": self.document_title,
+        "reference_id": self.reference_id_sign,
+        "documents": [{
+            "reference_doc_id": self.reference_doc_id or "DOC1",
+            "content_type": "pdf",
+            "content": content_data,
+            "signature_sequence": self.signature_sequence or "parallel"
+        }],
+        "signers_info": signers_list
+    }
+
+        req_json = json.dumps(payload, indent=2)
         try:
             response = requests.post(
-                ESIGN_CONFIG["URL"], json=payload, headers=ESIGN_CONFIG["HEADERS"])
+            ESIGN_CONFIG["URL"], 
+            json=payload, 
+            headers=ESIGN_CONFIG["HEADERS"]
+        )
             res_data = response.json()
             res_json = json.dumps(res_data, indent=2)
 
+        # Log request and response to Frappe fields
             self.request_body = req_json
             self.response_body = res_json
             self.full_response = (self.full_response or "") + \
-                f"\n\n--- ESIGN REQUEST ---\n{req_json}\n\n--- ESIGN RESPONSE ---\n{res_json}"
+            f"\n\n--- ESIGN REQUEST ---\n{req_json}\n\n--- ESIGN RESPONSE ---\n{res_json}"
 
             self.save()
 
             return {
-                "request": req_json,
-                "response": res_json,
-                "status": str(res_data.get("status") or "").lower(),
-                "error": res_data.get("message") or res_data.get("error")
-            }
+                "status": "success",
+                "response": res_data
+        }
         except Exception as e:
-            frappe.throw(f"API Connection Error: {str(e)}")
+            frappe.throw(f"API Error: {str(e)}")
+        
+
+    def autoname(self):
+        name = f"{self.second_party_name}-{self.category_of_agreement}-{self.date}"
+
+        # Clean spaces
+        name = name.replace(" ", "-")
+
+        # Handle duplicate
+        if frappe.db.exists(self.doctype, name):
+            name = f"{name}-{frappe.generate_hash(length=4)}"
+
+        self.name = name
+
+    def before_insert(self):
+        # Generate a unique short ID (e.g., 'ESS-5f3a2b') or a full UUID
+        # Using uuid4().hex[:10] gives a 10-character unique string
+        unique_ref = f"REF-{uuid.uuid4().hex[:8].upper()}"
+        
+        self.reference_id = unique_ref
+        self.reference_id_sign = unique_ref

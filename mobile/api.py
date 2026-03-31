@@ -1,3 +1,4 @@
+from mobile.mobile.doctype.tanker_weight_log.tanker_weight_log import capture_scale_data
 import frappe
 import json
 from frappe.utils import today, add_days, get_first_day, get_last_day, getdate, flt, formatdate
@@ -287,6 +288,7 @@ def get_order_list(filter_type="Last 7 Days", start_date=None, end_date=None):
                                 )
     return orders
 
+
 @frappe.whitelist()
 def get_order_details(order_id):
     if not frappe.db.exists("Sales Order", order_id):
@@ -513,25 +515,25 @@ def fetch_customer_catalog(customer_id):
 
     # 5. Fill the table with Smart Logic
     enabled_count = 0
-    
+
     for row in data:
         should_enable = 0
-        
+
         # Priority 1: Exact match with Sales UOM
         if row.sales_uom and row.uom == row.sales_uom:
             should_enable = 1
-            
+
         # Priority 2: If no Sales UOM defined, fallback to Stock UOM
         elif not row.sales_uom and row.uom == row.stock_uom:
             should_enable = 1
-            
+
         doc.append("custom_app_item_setting", {
             "item_code": row.item_code,
             "item_name": row.item_name,
             "uom": row.uom,
             "allow_on_app": should_enable  # 1 or 0 based on logic above
         })
-        
+
         if should_enable:
             enabled_count += 1
 
@@ -539,11 +541,6 @@ def fetch_customer_catalog(customer_id):
     doc.save(ignore_permissions=True)
 
     return f"Successfully fetched catalog. Auto-enabled {enabled_count} default UOMs."
-
-
-from mobile.mobile.doctype.tanker_weight_log.tanker_weight_log import capture_scale_data
-
-from mobile.mobile.doctype.tanker_weight_log.tanker_weight_log import capture_scale_data
 
 @frappe.whitelist(allow_guest=True)
 def s(v=None):

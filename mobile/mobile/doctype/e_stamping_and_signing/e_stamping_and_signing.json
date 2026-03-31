@@ -1,21 +1,27 @@
 {
  "actions": [],
  "allow_rename": 1,
+ "autoname": "[second_party_name]-[document_category]",
  "creation": "2026-03-11 15:41:01.290312",
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
-  "stamping_details_tab",
+  "option_select_tab",
   "choose_actio",
-  "request_sent_section",
-  "reference_id",
   "content",
   "convert_pdf",
+  "column_break_iwnf",
+  "second_party_name",
+  "category_of_agreement",
+  "date",
+  "column_break_qazg",
+  "stamping_details_tab",
+  "request_sent_section",
+  "reference_id",
   "stamp_state",
   "stamp_amount",
   "document_category",
   "stamp_duty_paid_by",
-  "second_party_name",
   "column_break_cvax",
   "first_party_name",
   "street_address",
@@ -94,7 +100,9 @@
    "fieldname": "document_category",
    "fieldtype": "Select",
    "label": "Document Category",
-   "options": "1\n186"
+   "options": "Shop Agreement\nBranch Agreement",
+   "read_only": 1,
+   "reqd": 1
   },
   {
    "default": "First Party",
@@ -178,7 +186,9 @@
   {
    "fieldname": "second_party_name",
    "fieldtype": "Data",
-   "label": "Second party name"
+   "in_list_view": 1,
+   "label": "Second Party Name",
+   "reqd": 1
   },
   {
    "fieldname": "full_response",
@@ -227,9 +237,12 @@
    "fieldname": "document_title",
    "fieldtype": "Select",
    "label": "Document Title",
-   "options": "Rent Agreement\nLease Agreement"
+   "options": "Shop Agreement\nBranch Agreement",
+   "read_only": 1,
+   "reqd": 1
   },
   {
+   "default": "DOC1",
    "fieldname": "reference_doc_id",
    "fieldtype": "Data",
    "label": "Reference doc id"
@@ -314,7 +327,7 @@
   },
   {
    "fieldname": "second_party_aadhaar_number",
-   "fieldtype": "Int",
+   "fieldtype": "Data",
    "label": "Second Party Aadhaar Number"
   },
   {
@@ -350,18 +363,49 @@
   {
    "fieldname": "choose_actio",
    "fieldtype": "Select",
+   "in_list_view": 1,
    "label": "Choose Action",
-   "options": "Stamping and signing\nsigning"
+   "options": "\nStamping and signing\nsigning",
+   "reqd": 1
+  },
+  {
+   "fieldname": "option_select_tab",
+   "fieldtype": "Tab Break",
+   "label": "Option select"
+  },
+  {
+   "fieldname": "column_break_qazg",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "column_break_iwnf",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "category_of_agreement",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Category of Agreement",
+   "options": "Shop Agreement\nBranch Agreement",
+   "reqd": 1
+  },
+  {
+   "fieldname": "date",
+   "fieldtype": "Datetime",
+   "in_list_view": 1,
+   "label": "Date",
+   "reqd": 1
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2026-03-17 13:16:49.182988",
+ "modified": "2026-03-31 12:45:36.769939",
  "modified_by": "Administrator",
  "module": "Mobile",
  "name": "E stamping and signing",
+ "naming_rule": "By fieldname",
  "owner": "Administrator",
  "permissions": [
   {
