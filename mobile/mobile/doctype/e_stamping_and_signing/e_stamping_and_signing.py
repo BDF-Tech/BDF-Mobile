@@ -85,6 +85,11 @@ class Estampingandsigning(Document):
             STAMP_CONFIG["URL"], json=payload, headers=STAMP_CONFIG["HEADERS"])
         res_data = response.json()
         res_json = json.dumps(res_data, indent=2)
+        api_status = str(res_data.get("status") or "Failed").title()
+        api_message = res_data.get("message") or "No message returned"
+    
+        self.db_set("status", api_status)
+        self.db_set("message", api_message)
 
         self.request_body_stamping = req_json
         self.response_body_stamping = res_json
@@ -96,12 +101,15 @@ class Estampingandsigning(Document):
         if api_status == "success":
             self.only_content = res_data.get("content")
 
+        
         self.save()
         return {
             "status": api_status,
             "error": res_data.get("message") or res_data.get("error"),
             "request": req_json,
-            "response": res_json
+            "response": res_json,
+            "status": self.status,
+            "message": self.message
         }
 
     @frappe.whitelist()
@@ -197,6 +205,18 @@ class Estampingandsigning(Document):
         )
             res_data = response.json()
             res_json = json.dumps(res_data, indent=2)
+            api_status = str(res_data.get("status") or "Failed").title()
+        
+            # Get error message (API uses 'error' for failures, otherwise NA)
+            api_message = res_data.get("error") or "NA"
+        
+        # Get error code
+            api_err_code = res_data.get("error_code") or "NA"
+
+        # Direct database updates
+            self.db_set("signing_status", api_status)
+            self.db_set("signing_api_message", api_message)
+            self.db_set("error_code_melento", api_err_code)
 
         # Log request and response to Frappe fields
             self.request_body = req_json
@@ -233,3 +253,7 @@ class Estampingandsigning(Document):
         
         self.reference_id = unique_ref
         self.reference_id_sign = unique_ref
+
+    def validate(self):
+        if frappe.session.user != "sanskar@bastardairyfarm.com":
+            self.request_body_stamping = None

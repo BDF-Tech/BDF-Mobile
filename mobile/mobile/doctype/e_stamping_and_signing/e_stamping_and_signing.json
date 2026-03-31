@@ -16,6 +16,9 @@
   "date",
   "column_break_qazg",
   "stamping_details_tab",
+  "status",
+  "column_break_hwmu",
+  "message",
   "request_sent_section",
   "reference_id",
   "stamp_state",
@@ -46,6 +49,11 @@
   "section_break_foqg",
   "amended_from",
   "e_sign_details_tab",
+  "signing_status",
+  "error_code_melento",
+  "column_break_vldt",
+  "signing_api_message",
+  "section_break_teny",
   "reference_id_sign",
   "document_title",
   "reference_doc_id",
@@ -82,7 +90,8 @@
   {
    "fieldname": "reference_id",
    "fieldtype": "Data",
-   "label": "Reference ID"
+   "label": "Reference ID",
+   "read_only": 1
   },
   {
    "default": "CG",
@@ -194,13 +203,13 @@
    "fieldname": "full_response",
    "fieldtype": "Code",
    "label": "Full Response",
-   "read_only": 1
+   "permlevel": 1
   },
   {
    "fieldname": "only_content",
    "fieldtype": "Code",
    "label": "Only Content",
-   "read_only": 1
+   "permlevel": 1
   },
   {
    "fieldname": "request_sent_section",
@@ -220,7 +229,8 @@
   {
    "fieldname": "reference_id_sign",
    "fieldtype": "Data",
-   "label": "Reference id sign"
+   "label": "Reference id sign",
+   "read_only": 1
   },
   {
    "fieldname": "convert_pdf",
@@ -231,7 +241,7 @@
    "fieldname": "request_content",
    "fieldtype": "Code",
    "label": "Request Content",
-   "read_only": 1
+   "permlevel": 1
   },
   {
    "fieldname": "document_title",
@@ -245,7 +255,8 @@
    "default": "DOC1",
    "fieldname": "reference_doc_id",
    "fieldtype": "Data",
-   "label": "Reference doc id"
+   "label": "Reference doc id",
+   "read_only": 1
   },
   {
    "fieldname": "column_break_rwno",
@@ -255,13 +266,15 @@
    "fieldname": "content_type",
    "fieldtype": "Select",
    "label": "Content Type",
-   "options": "pdf\ntemplate"
+   "options": "pdf\ntemplate",
+   "read_only": 1
   },
   {
    "fieldname": "signature_sequence",
    "fieldtype": "Select",
    "label": "Signature Sequence",
-   "options": "parallel"
+   "options": "parallel",
+   "read_only": 1
   },
   {
    "fieldname": "signers_info_section",
@@ -282,12 +295,14 @@
   {
    "fieldname": "request_body",
    "fieldtype": "Code",
-   "label": "request body "
+   "label": "request body ",
+   "permlevel": 1
   },
   {
    "fieldname": "response_body",
    "fieldtype": "Code",
-   "label": "response body"
+   "label": "response body",
+   "permlevel": 1
   },
   {
    "fieldname": "column_break_xmec",
@@ -297,13 +312,13 @@
    "fieldname": "request_body_stamping",
    "fieldtype": "Code",
    "label": "Request Body Stamping",
-   "read_only": 1
+   "permlevel": 1
   },
   {
    "fieldname": "response_body_stamping",
    "fieldtype": "Code",
    "label": "Response Body Stamping",
-   "read_only": 1
+   "permlevel": 1
   },
   {
    "fieldname": "custom_fields_section",
@@ -395,13 +410,55 @@
    "in_list_view": 1,
    "label": "Date",
    "reqd": 1
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Data",
+   "label": "Stamping API Status ",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_hwmu",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "message",
+   "fieldtype": "Data",
+   "label": "Stamping API Message",
+   "read_only": 1
+  },
+  {
+   "fieldname": "signing_status",
+   "fieldtype": "Data",
+   "label": "Signing API Status",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_teny",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "signing_api_message",
+   "fieldtype": "Data",
+   "label": "Signing API Message",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_vldt",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "error_code_melento",
+   "fieldtype": "Data",
+   "label": "Error code Melento",
+   "read_only": 1
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2026-03-31 12:45:36.769939",
+ "modified": "2026-03-31 18:03:02.183663",
  "modified_by": "Administrator",
  "module": "Mobile",
  "name": "E stamping and signing",
@@ -409,6 +466,8 @@
  "owner": "Administrator",
  "permissions": [
   {
+   "amend": 1,
+   "cancel": 1,
    "create": 1,
    "delete": 1,
    "email": 1,
@@ -417,8 +476,43 @@
    "read": 1,
    "report": 1,
    "role": "System Manager",
+   "select": 1,
    "share": 1,
    "submit": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Agreement API",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Agreement View",
+   "share": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Agreement API deubbging",
+   "select": 1,
+   "share": 1,
    "write": 1
   }
  ],
