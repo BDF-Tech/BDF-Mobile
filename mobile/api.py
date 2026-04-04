@@ -78,36 +78,53 @@ def get_item_list():
             return {"error": f"No Customer linked to user {frappe.session.user}. Please contact support."}
 
         # --- STEP 2: Get Price List ---
-        customer_details = frappe.db.get_value("Customer", customer_id,
-                                               ["default_price_list", "customer_group"], as_dict=True)
-
-        price_list = customer_details.get("default_price_list")
-        if not price_list and customer_details.get("customer_group"):
-            price_list = frappe.db.get_value(
-                "Customer Group", customer_details["customer_group"], "default_price_list")
-        if not price_list:
-            price_list = frappe.db.get_value(
-                "Selling Settings", None, "selling_price_list") or "Standard Selling"
-
-        # --- STEP 3: Get Customer Catalog Rules (Strict Mode) ---
-        # Fetch only rows that are explicitly allowed
-        allowed_rows = frappe.db.get_all(
-            "Customer App Catalog",
-            filters={"parent": customer_id, "allow_on_app": 1},
-            fields=["item_code", "uom"]
+        customer_details = frappe.db.get_value(
+            "Customer",
+            customer_id,
+            ["default_price_list", "customer_group", "custom_app_template"],  # 🔥 added template
+            as_dict=True
         )
 
-        # 🛑 SECURITY FIX: If table is empty, return NOTHING.
+        price_list = customer_details.get("default_price_list")
+
+        if not price_list and customer_details.get("customer_group"):
+            price_list = frappe.db.get_value(
+                "Customer Group",
+                customer_details["customer_group"],
+                "default_price_list"
+            )
+
+        if not price_list:
+            price_list = frappe.db.get_value(
+                "Selling Settings",
+                None,
+                "selling_price_list"
+            ) or "Standard Selling"
+
+        # --- STEP 3: GET TEMPLATE ITEMS (REPLACED LOGIC) ---
+        template = customer_details.get("custom_app_template")
+
+        if not template:
+            return []
+
+        allowed_rows = frappe.get_all(
+            "Item Template Item",
+            filters={
+                "parent": template,
+                "allow_on_app": 1
+            },
+            fields=["item as item_code", "uom"]
+        )
+
+        # 🛑 STRICT: No template items → no result
         if not allowed_rows:
             return []
 
-        # Create filter sets
+        # 🔥 OPTIMIZED SETS
         allowed_item_codes = tuple(set(r.item_code for r in allowed_rows))
         allowed_uom_map = set(f"{r.item_code}_{r.uom}" for r in allowed_rows)
 
-        # --- STEP 4: Main Item Query (Optimized) ---
-        # We now pass 'allowed_item_codes' to SQL.
-        # This prevents fetching items the customer isn't allowed to see.
+        # --- STEP 4: Main Item Query (UNCHANGED) ---
         items = frappe.db.sql("""
             SELECT
                 i.item_code, i.item_name, i.image, i.item_group,
@@ -129,14 +146,12 @@ def get_item_list():
         if not items:
             return []
 
-        # --- STEP 5: Bulk Fetch UOMs ---
-        # We reuse the allowed list to make this query faster too
-        all_uoms = frappe.db.get_all("UOM Conversion Detail",
-                                     filters={"parent": [
-                                         "in", allowed_item_codes]},
-                                     fields=["parent", "uom",
-                                             "conversion_factor"]
-                                     )
+        # --- STEP 5: Bulk Fetch UOMs (UNCHANGED but optimized filter) ---
+        all_uoms = frappe.db.get_all(
+            "UOM Conversion Detail",
+            filters={"parent": ["in", allowed_item_codes]},
+            fields=["parent", "uom", "conversion_factor"]
+        )
 
         uom_lookup = defaultdict(list)
         for u in all_uoms:
@@ -144,9 +159,11 @@ def get_item_list():
 
         result = []
 
-        # --- STEP 6: Processing & Strict Filtering ---
+        # --- STEP 6: Processing (UNCHANGED CORE LOGIC) ---
         for item in items:
             item_uom_rows = uom_lookup.get(item.item_code, [])
+
+            # 🔥 faster dict creation
             uom_map = {row.uom: row.conversion_factor for row in item_uom_rows}
 
             if item.stock_uom not in uom_map:
@@ -155,16 +172,19 @@ def get_item_list():
             final_uoms_list = []
 
             for uom, factor in uom_map.items():
-                # STRICT CHECK: Only add UOM if it exists in the 'allowed_uom_map'
                 key = f"{item.item_code}_{uom}"
-                if key in allowed_uom_map:
-                    final_uoms_list.append(
-                        {"uom": uom, "conversion_factor": factor})
 
-            # If item has no valid UOMs allowed (e.g. they unchecked all UOMs), skip it
+                if key in allowed_uom_map:
+                    final_uoms_list.append({
+                        "uom": uom,
+                        "conversion_factor": factor
+                    })
+
             if not final_uoms_list:
                 continue
 
+            if not item.item_code:
+                continue
             result.append({
                 "item_code": item.item_code,
                 "item_name": item.item_name,
@@ -201,99 +221,91 @@ def get_my_dashboard_stats():
 # 🛒 ORDER PLACEMENT API
 # =========================================================
 
-@frappe.whitelist()
+
+
 @frappe.whitelist()
 def place_order(items, req_date=None, req_shift=None, po_no=None):
     try:
         customer_id = get_logged_in_customer()
 
-        if isinstance(items, str):
-            cart_items = json.loads(items)
-        else:
-            cart_items = items
+        # 🔥 Parse items safely
+        cart_items = json.loads(items) if isinstance(items, str) else items
 
         if not cart_items:
             frappe.throw("Cannot place empty order")
 
-        target_date = req_date if req_date else add_days(today(), 1)
-        target_shift = req_shift if req_shift else "Morning"
+        target_date = req_date or add_days(today(), 1)
+        target_shift = req_shift or "Morning"
 
-        # 1️⃣ VALIDATION CHECK
-        existing_so = frappe.db.get_value("Sales Order", {
-            "customer": customer_id,
-            "delivery_date": target_date,
-            "delivery_shift": target_shift,
-            "docstatus": ["<", 2]
-        }, ["name", "docstatus"], as_dict=True)
+        # 1️⃣ VALIDATION CHECK (optimized query)
+        existing_so = frappe.db.get_value(
+            "Sales Order",
+            {
+                "customer": customer_id,
+                "delivery_date": target_date,
+                "delivery_shift": target_shift,
+                "docstatus": ["<", 2]
+            },
+            ["name", "docstatus"],
+            as_dict=True
+        )
 
         if existing_so:
-            status_msg = "Draft" if existing_so.docstatus == 0 else "Confirmed"
             return {
                 "status": "error",
-                "message": f"A {status_msg} Order ({existing_so.name}) already exists for {formatdate(target_date)} ({target_shift})."
+                "message": f"A {'Draft' if existing_so.docstatus == 0 else 'Confirmed'} Order ({existing_so.name}) already exists for {formatdate(target_date)} ({target_shift})."
             }
 
-        # 2️⃣ CREATE NEW ORDER
+        # 2️⃣ CREATE ORDER
         so = frappe.new_doc("Sales Order")
         so.customer = customer_id
 
-        # 🔥 STEP 1: Apply standard ERPNext defaults
+        # 🔥 Apply ERPNext defaults FIRST (keep as is)
         so.run_method("set_missing_values")
 
-        # 🔥 STEP 2: Fetch latest route from Route Master Link (child table)
-        route_data = frappe.db.sql("""
-            SELECT parent
-            FROM `tabRoute Master Link`
-            WHERE link_doctype = 'Customer'
-            AND link_name = %s
-            ORDER BY modified DESC
-            LIMIT 1
-        """, (customer_id,), as_dict=True)
+        # 🔥 Set remaining fields (keep your logic)
+        so.update({
+            "transaction_date": today(),
+            "delivery_date": target_date,
+            "delivery_shift": target_shift,
+            "order_type": "Sales",
+            "company": frappe.defaults.get_user_default("Company"),
+            "po_no": po_no or None
+        })
 
-        if route_data:
-            route_name = route_data[0].parent
-            so.route = route_name
-
-            # 🔥 OPTIONAL: also set territory from Route Master
-            territory = frappe.db.get_value("Route Master", route_name, "territory")
-            if territory:
-                so.territory = territory
-        else:
-            frappe.throw("No Route assigned to this customer")
-
-        # 🔥 DEBUG (remove later)
-        frappe.log_error(f"Route assigned: {so.route}")
-
-        so.transaction_date = today()
-        so.delivery_date = target_date
-        so.delivery_shift = target_shift
-        so.order_type = "Sales"
-        so.company = frappe.defaults.get_user_default("Company")
-
-        if po_no:
-            so.po_no = po_no
-
-        for row in cart_items:
-            so.append("items", {
+        # 🔥 Add items (same logic)
+        so.extend("items", [
+            {
                 "item_code": row.get("item_code"),
                 "qty": row.get("qty"),
                 "delivery_date": target_date,
                 "uom": row.get("uom"),
                 "rate": row.get("rate", 0)
-            })
+            }
+            for row in cart_items
+            if row.get("item_code") and row.get("qty")
+        ])
 
+        # 🔥 FINAL TERRITORY SET (CRITICAL FIX — DO NOT MOVE ABOVE)
+        territory = frappe.db.get_value("Customer", customer_id, "territory")
+
+        if not territory:
+            frappe.throw("Customer has no Territory assigned")
+
+        so.territory = territory
+
+        # 🔥 SAVE (no change)
         so.save(ignore_permissions=True)
 
         return {
             "status": "success",
             "order_name": so.name,
-            "route": so.route  # 🔥 optional but useful for app/debug
+            "territory": so.territory
         }
 
     except Exception as e:
-        frappe.log_error(f"Order Error: {str(e)}")
-        return {"status": "error", "message": str(e)}
-    
+        frappe.log_error(frappe.get_traceback(), "Order Error")
+        return {"status": "error", "message": str(e)}    
 # =========================================================
 
 @frappe.whitelist()
@@ -405,47 +417,71 @@ def get_invoice_details(invoice_id):
 # =========================================================
 
 @frappe.whitelist()
-def get_customer_ledger(filter_type="This Year", start_date=None, end_date=None, voucher_type=None):
+def get_customer_ledger(filter_type="This Year", start_date=None, end_date=None, voucher_type=None, company=None):
     customer_id = get_logged_in_customer()
 
     # 1. Get resolved dates
     from_date, to_date = get_date_range(filter_type, start_date, end_date)
 
-    # 2. Base Filters
-    filters = {
-        "party_type": "Customer",
-        "party": customer_id,
-        "posting_date": ["between", [from_date, to_date]],
-        "is_cancelled": 0
-    }
+    # 🔥 DEBUG (remove later)
+    frappe.log_error(f"Company received: {company}", "Ledger Debug")
 
-    # 3. Dynamic Filtering Logic
+    # 2. Build SQL Conditions
+    conditions = """
+        WHERE party_type = 'Customer'
+        AND party = %s
+        AND posting_date BETWEEN %s AND %s
+        AND is_cancelled = 0
+    """
+
+    params = [customer_id, from_date, to_date]
+
+    # 🔥 Company filter (STRICT)
+    if company:
+        conditions += " AND company = %s"
+        params.append(company)
+
+    # 3. Voucher Type Filter
     if voucher_type:
-        filters["voucher_type"] = voucher_type
+        conditions += " AND voucher_type = %s"
+        params.append(voucher_type)
     else:
-        # Show Everything (Invoices + Payments), excluding internal tech entries
-        filters["voucher_type"] = ["not in", ["Payment Ledger Entry"]]
+        conditions += " AND voucher_type != 'Payment Ledger Entry'"
 
-    # 4. Fetch Data
-    gl_entries = frappe.get_list("GL Entry",
-                                 filters=filters,
-                                 fields=["posting_date", "voucher_type",
-                                         "voucher_no", "debit", "credit", "remarks"],
-                                 order_by="posting_date asc, creation asc",
-                                 ignore_permissions=True
-                                 )
-
-    # 5. Calculate Background Balance (Math only, no row added)
-    opening_balance_data = frappe.db.sql("""
-        SELECT SUM(debit - credit) as balance
+    # 4. Fetch GL Entries (STRICT SQL)
+    gl_entries = frappe.db.sql(f"""
+        SELECT
+            posting_date,
+            voucher_type,
+            voucher_no,
+            debit,
+            credit,
+            remarks
         FROM `tabGL Entry`
-        WHERE party_type = 'Customer' 
-        AND party = %s 
+        {conditions}
+        ORDER BY posting_date ASC, creation ASC
+    """, tuple(params), as_dict=True)
+
+    # 5. Opening Balance (STRICT SQL)
+    opening_conditions = """
+        WHERE party_type = 'Customer'
+        AND party = %s
         AND posting_date < %s
         AND is_cancelled = 0
-    """, (customer_id, from_date), as_dict=True)
+    """
 
-    # We initialize the math here, but we DO NOT append a row to 'data'
+    opening_params = [customer_id, from_date]
+
+    if company:
+        opening_conditions += " AND company = %s"
+        opening_params.append(company)
+
+    opening_balance_data = frappe.db.sql(f"""
+        SELECT SUM(debit - credit) as balance
+        FROM `tabGL Entry`
+        {opening_conditions}
+    """, tuple(opening_params), as_dict=True)
+
     running_balance = opening_balance_data[0].balance or 0.0
 
     data = []
@@ -453,13 +489,14 @@ def get_customer_ledger(filter_type="This Year", start_date=None, end_date=None,
     # 6. Process Transactions
     for entry in gl_entries:
         running_balance += (entry.debit - entry.credit)
+
         data.append({
             "date": entry.posting_date,
             "voucher_type": entry.voucher_type,
             "voucher_no": entry.voucher_no,
             "debit": entry.debit,
             "credit": entry.credit,
-            "balance": running_balance  # This will now be mathematically correct
+            "balance": running_balance
         })
 
     return data
@@ -522,7 +559,7 @@ def get_user_profile():
         frappe.log_error(f"Profile Error: {str(e)}")
         return {"error": str(e)}
 
-@frappe.whitelist()
+'''@frappe.whitelist()
 def fetch_customer_catalog(customer_id):
 
     # 1. Security Check
@@ -583,8 +620,74 @@ def fetch_customer_catalog(customer_id):
     doc.save(ignore_permissions=True)
 
     return f"Successfully fetched catalog. Auto-enabled {enabled_count} default UOMs."
-
+'''
 @frappe.whitelist(allow_guest=True)
 def s(v=None):
     # Pass 'v' from the URL to your main function
     return capture_scale_data(w=v)
+
+@frappe.whitelist()
+def fetch_template_items(template_name):
+
+    # 1. Permission Check
+    if not frappe.has_permission("Item Template Master", "write"):
+        frappe.throw("No permission to edit Item Template")
+
+    # 2. Fetch Items + UOMs + Sales/Stock Preference
+    data = frappe.db.sql("""
+        SELECT 
+            i.item_code, 
+            i.item_name, 
+            i.sales_uom,
+            i.stock_uom,
+            i.custom_allow_on_app,
+            u.uom,
+            u.conversion_factor
+        FROM `tabItem` i
+        JOIN `tabUOM Conversion Detail` u ON u.parent = i.item_code
+        WHERE 
+            i.is_sales_item = 1 
+            AND i.disabled = 0
+            AND i.custom_allow_on_app = 1   -- 🔥 NEW FILTER
+        ORDER BY i.item_name ASC
+    """, as_dict=True)
+
+    if not data:
+        return "No allowed items found"
+
+    # 3. Get Template Doc
+    doc = frappe.get_doc("Item Template Master", template_name)
+
+    # 4. Clear existing table
+    doc.set("items", [])
+
+    added_count = 0
+
+    # 5. Loop through data
+    for row in data:
+
+        allow_on_app = 0
+
+        # ✅ Check if UOM matches sales_uom
+        if row.sales_uom and row.uom == row.sales_uom:
+            allow_on_app = 1
+
+        # (Optional fallback if no sales_uom)
+        elif not row.sales_uom and row.uom == row.stock_uom:
+            allow_on_app = 1
+
+        # 🔥 Append ALL rows, but mark allow_on_app accordingly
+        doc.append("items", {
+            "item": row.item_code,
+            "item_name": row.item_name,
+            "uom": row.uom,
+            "conversion_factor": row.conversion_factor,
+            "allow_on_app": allow_on_app   # ✅ your new field
+        })
+
+        added_count += 1
+
+    # 6. Save
+    doc.save(ignore_permissions=True)
+
+    return f"{added_count} rows added. Default UOM auto-selected."

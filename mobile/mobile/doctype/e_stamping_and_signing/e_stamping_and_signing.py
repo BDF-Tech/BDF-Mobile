@@ -206,11 +206,19 @@ class Estampingandsigning(Document):
 
         req_json = json.dumps(payload, indent=2)
         try:
+            secrets = get_melento_secrets()
+
+            headers = {
+                "x-parse-rest-api-key": secrets["esign"]["api_key"],
+                "x-parse-application-id": secrets["esign"]["application_id"],
+                "Content-Type": "application/json"
+                }
+
             response = requests.post(
-            ESIGN_CONFIG["URL"], 
-            json=payload, 
-            headers=ESIGN_CONFIG["HEADERS"]
-        )
+            secrets["esign"]["url"],
+            json=payload,
+            headers=headers
+)
             res_data = response.json()
             res_json = json.dumps(res_data, indent=2)
             api_status = str(res_data.get("status") or "Failed").title()
