@@ -1,3 +1,5 @@
+import secrets
+
 import frappe
 import requests
 import json
@@ -5,25 +7,20 @@ import base64
 from frappe.model.document import Document
 import uuid
 
-# GLOBAL CONFIGURATION
-STAMP_CONFIG = {
-    "URL": "https://in-stamp.staging-signdesk.com/api/v2/estamp/requestStampPaper",
-    "HEADERS": {
-        "x-parse-rest-api-key": "fed53dbaecc002e7914e74a20b8ce22f",
-        "x-parse-application-id": "bastardairyfarmprivatelimited_user_2",
-        "Content-Type": "application/json"
+def get_melento_secrets():
+    doc = frappe.get_single("Melento Secrets")
+    return {
+        "stamping": {
+            "api_key": doc.get_password("stamping_api_key"),
+            "application_id": doc.get_password("stamping_application_id"),
+            "url": "https://in-stamp.staging-signdesk.com/api/v2/estamp/requestStampPaper"
+        },
+        "esign": {
+            "api_key": doc.get_password("signing_api_key"),
+            "application_id": doc.get_password("signing_application_id"),
+            "url": "https://uat.signdesk.in/api/sandbox/signRequest"
+        }
     }
-}
-
-ESIGN_CONFIG = {
-    "URL": "https://uat.signdesk.in/api/sandbox/signRequest",
-    "HEADERS": {
-        "x-parse-rest-api-key": "68a6d6925379c7f349d1661302fe55ad",
-        "x-parse-application-id": "bastardairyfarmprivatelimited_user_1",
-        "Content-Type": "application/json"
-    }
-}
-
 
 class Estampingandsigning(Document):
     @frappe.whitelist()
@@ -81,8 +78,19 @@ class Estampingandsigning(Document):
         }
 
         req_json = json.dumps(payload, indent=2)
+        secrets = get_melento_secrets()
+
+        headers = {
+            "x-parse-rest-api-key": secrets["stamping"]["api_key"],
+            "x-parse-application-id": secrets["stamping"]["application_id"],
+            "Content-Type": "application/json"
+        }
+
         response = requests.post(
-            STAMP_CONFIG["URL"], json=payload, headers=STAMP_CONFIG["HEADERS"])
+            secrets["stamping"]["url"],
+            json=payload,
+            headers=headers
+        )
         res_data = response.json()
         res_json = json.dumps(res_data, indent=2)
         api_status = str(res_data.get("status") or "Failed").title()

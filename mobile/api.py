@@ -202,6 +202,7 @@ def get_my_dashboard_stats():
 # =========================================================
 
 @frappe.whitelist()
+@frappe.whitelist()
 def place_order(items, req_date=None, req_shift=None, po_no=None):
     try:
         customer_id = get_logged_in_customer()
@@ -218,25 +219,51 @@ def place_order(items, req_date=None, req_shift=None, po_no=None):
         target_shift = req_shift if req_shift else "Morning"
 
         # 1️⃣ VALIDATION CHECK
-        # Check if ANY order (Draft or Submitted) exists for this slot
         existing_so = frappe.db.get_value("Sales Order", {
             "customer": customer_id,
             "delivery_date": target_date,
             "delivery_shift": target_shift,
-            "docstatus": ["<", 2]  # 0 = Draft, 1 = Submitted
+            "docstatus": ["<", 2]
         }, ["name", "docstatus"], as_dict=True)
 
         if existing_so:
-            # 🛑 STOP: Do not create/overwrite. Return Error.
             status_msg = "Draft" if existing_so.docstatus == 0 else "Confirmed"
             return {
                 "status": "error",
                 "message": f"A {status_msg} Order ({existing_so.name}) already exists for {formatdate(target_date)} ({target_shift})."
             }
 
-        # 2️⃣ CREATE NEW ORDER (Only if validation passes)
+        # 2️⃣ CREATE NEW ORDER
         so = frappe.new_doc("Sales Order")
         so.customer = customer_id
+
+        # 🔥 STEP 1: Apply standard ERPNext defaults
+        so.run_method("set_missing_values")
+
+        # 🔥 STEP 2: Fetch latest route from Route Master Link (child table)
+        route_data = frappe.db.sql("""
+            SELECT parent
+            FROM `tabRoute Master Link`
+            WHERE link_doctype = 'Customer'
+            AND link_name = %s
+            ORDER BY modified DESC
+            LIMIT 1
+        """, (customer_id,), as_dict=True)
+
+        if route_data:
+            route_name = route_data[0].parent
+            so.route = route_name
+
+            # 🔥 OPTIONAL: also set territory from Route Master
+            territory = frappe.db.get_value("Route Master", route_name, "territory")
+            if territory:
+                so.territory = territory
+        else:
+            frappe.throw("No Route assigned to this customer")
+
+        # 🔥 DEBUG (remove later)
+        frappe.log_error(f"Route assigned: {so.route}")
+
         so.transaction_date = today()
         so.delivery_date = target_date
         so.delivery_shift = target_shift
@@ -256,13 +283,17 @@ def place_order(items, req_date=None, req_shift=None, po_no=None):
             })
 
         so.save(ignore_permissions=True)
-        return {"status": "success", "order_name": so.name}
+
+        return {
+            "status": "success",
+            "order_name": so.name,
+            "route": so.route  # 🔥 optional but useful for app/debug
+        }
 
     except Exception as e:
         frappe.log_error(f"Order Error: {str(e)}")
-        # =========================================================
         return {"status": "error", "message": str(e)}
-# 📜 SALES ORDER LIST (UPDATED)
+    
 # =========================================================
 
 @frappe.whitelist()
@@ -453,17 +484,28 @@ def get_user_profile():
 
         customer_data = {}
         if customer_id:
-            customer_doc = frappe.db.get_value("Customer", customer_id,
-                                               ["custom_starting_date_of_the_contract",
-                                                   "food_license_number", "food_license_validity"],
-                                               as_dict=True
-                                               )
+            customer_doc = frappe.db.get_value(
+                "Customer",
+                customer_id,
+                [
+                    "custom_starting_date_of_the_contract",
+                    "food_license_number",
+                    "food_license_validity",
+                    "custom_security_deposit_amount",   # ✅ added
+                    "custom_rent_amount"                # ✅ added
+                ],
+                as_dict=True
+            )
 
             if customer_doc:
                 customer_data = {
                     "contract_date": formatdate(customer_doc.get("custom_starting_date_of_the_contract")) if customer_doc.get("custom_starting_date_of_the_contract") else None,
                     "license_no": customer_doc.get("food_license_number"),
-                    "license_validity": formatdate(customer_doc.get("food_license_validity")) if customer_doc.get("food_license_validity") else None
+                    "license_validity": formatdate(customer_doc.get("food_license_validity")) if customer_doc.get("food_license_validity") else None,
+
+                    # 🔥 NEW FIELDS
+                    "security_deposit": customer_doc.get("custom_security_deposit_amount"),
+                    "rent_amount": customer_doc.get("custom_rent_amount")
                 }
 
         return {

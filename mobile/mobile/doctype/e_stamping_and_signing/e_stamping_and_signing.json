@@ -53,6 +53,7 @@
   "error_code_melento",
   "column_break_vldt",
   "signing_api_message",
+  "column_break_aydi",
   "section_break_teny",
   "reference_id_sign",
   "document_title",
@@ -63,6 +64,7 @@
   "signers_info_section",
   "signer_info_table",
   "api_call_back_tab",
+  "section_break_bioj",
   "request_body_stamping",
   "response_body_stamping",
   "full_response",
@@ -446,13 +448,21 @@
    "fieldtype": "Data",
    "label": "Error code Melento",
    "read_only": 1
+  },
+  {
+   "fieldname": "column_break_aydi",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "section_break_bioj",
+   "fieldtype": "Section Break"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2026-03-31 18:44:10.633168",
+ "modified": "2026-04-03 10:33:23.838520",
  "modified_by": "Administrator",
  "module": "Mobile",
  "name": "E stamping and signing",
