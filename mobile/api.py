@@ -387,29 +387,51 @@ def get_invoice_list(filter_type="Last 7 Days", start_date=None, end_date=None):
     return invoices
 
 @frappe.whitelist()
-def get_invoice_details(invoice_id):
+@frappe.whitelist()
+def get_invoice_details(invoice_id=None):
+    
+    # 🔥 If not provided → return safe response
+    if not invoice_id:
+        return {
+            "status": "error",
+            "message": "Invoice ID not provided"
+        }
+
     if not frappe.db.exists("Sales Invoice", invoice_id):
-        frappe.throw("Invoice not found")
+        return {
+            "status": "error",
+            "message": "Invoice not found"
+        }
 
     doc = frappe.get_doc("Sales Invoice", invoice_id)
     current_customer = get_logged_in_customer()
 
+    # 🔒 Security check
     if doc.customer != current_customer:
-        frappe.throw("Unauthorized access")
+        return {
+            "status": "error",
+            "message": "Unauthorized access"
+        }
 
     return {
+        "status": "success",
+
         "name": doc.name,
         "date": doc.posting_date,
-        "status": doc.status,
-        "grand_total": doc.grand_total,
-        "outstanding": doc.outstanding_amount,
-        "items": [{
-            "item_code": item.item_code,
-            "item_name": item.item_name,
-            "qty": item.qty,
-            "rate": item.rate,
-            "amount": item.amount
-        } for item in doc.items]
+        "status_label": doc.status,
+        "grand_total": float(doc.grand_total or 0),
+        "outstanding": float(doc.outstanding_amount or 0),
+
+        "items": [
+            {
+                "item_code": item.item_code,
+                "item_name": item.item_name,
+                "qty": float(item.qty or 0),
+                "rate": float(item.rate or 0),
+                "amount": float(item.amount or 0)
+            }
+            for item in doc.items
+        ]
     }
 
 # =========================================================
