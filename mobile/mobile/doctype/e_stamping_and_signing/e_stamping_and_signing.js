@@ -230,14 +230,3 @@ frappe.ui.form.on("E stamping and signing", {
     }
   },
 });
-
-
-frappe.ui.form.on('E stamping and signing', {
-    status: function(frm) {
-        
-            frm.set_df_property('request_body_stamping', 'read_only', 1);
-            //frm.set_df_property('stamp_amount', 'read_only', 1);
-            //frm.set_df_property('document_category', 'read_only', 0);
-        
-    }
-});

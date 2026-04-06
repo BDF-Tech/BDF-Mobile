@@ -209,8 +209,7 @@
   {
    "fieldname": "only_content",
    "fieldtype": "Code",
-   "label": "Only Content",
-   "permlevel": 1
+   "label": "Only Content"
   },
   {
    "fieldname": "request_sent_section",
