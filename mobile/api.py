@@ -387,7 +387,6 @@ def get_invoice_list(filter_type="Last 7 Days", start_date=None, end_date=None):
     return invoices
 
 @frappe.whitelist()
-@frappe.whitelist()
 def get_invoice_details(invoice_id=None):
     
     # 🔥 If not provided → return safe response
@@ -438,15 +437,18 @@ def get_invoice_details(invoice_id=None):
 # 📒 LEDGER REPORT
 # =========================================================
 
+import frappe
+
 @frappe.whitelist()
-def get_customer_ledger(filter_type="This Year", start_date=None, end_date=None, voucher_type=None, company=None):
+def get_customer_ledger(filter_type="This Year", start_date=None, end_date=None, voucher_type=None, selected_company=None):
+    # (Assuming get_logged_in_customer and get_date_range are defined elsewhere in your file)
     customer_id = get_logged_in_customer()
 
     # 1. Get resolved dates
     from_date, to_date = get_date_range(filter_type, start_date, end_date)
 
     # 🔥 DEBUG (remove later)
-    frappe.log_error(f"Company received: {company}", "Ledger Debug")
+    frappe.log_error(f"Company received: {selected_company}", "Ledger Debug")
 
     # 2. Build SQL Conditions
     conditions = """
@@ -458,10 +460,10 @@ def get_customer_ledger(filter_type="This Year", start_date=None, end_date=None,
 
     params = [customer_id, from_date, to_date]
 
-    # 🔥 Company filter (STRICT)
-    if company:
+    # 🔥 Company filter (STRICT) - Updated variable name
+    if selected_company:
         conditions += " AND company = %s"
-        params.append(company)
+        params.append(selected_company)
 
     # 3. Voucher Type Filter
     if voucher_type:
@@ -494,9 +496,10 @@ def get_customer_ledger(filter_type="This Year", start_date=None, end_date=None,
 
     opening_params = [customer_id, from_date]
 
-    if company:
+    # 🔥 Apply the same selected_company filter to Opening Balance
+    if selected_company:
         opening_conditions += " AND company = %s"
-        opening_params.append(company)
+        opening_params.append(selected_company)
 
     opening_balance_data = frappe.db.sql(f"""
         SELECT SUM(debit - credit) as balance
