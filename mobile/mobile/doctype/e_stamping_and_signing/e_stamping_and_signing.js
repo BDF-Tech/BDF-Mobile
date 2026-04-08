@@ -230,3 +230,36 @@ frappe.ui.form.on("E stamping and signing", {
     }
   },
 });
+
+frappe.ui.form.on('E stamping and signing', {
+
+    refresh: function(frm) {
+
+        // ✅ Auto add rows (only once)
+        if (frm.is_new() && (!frm.doc.signer_info_table || frm.doc.signer_info_table.length === 0)) {
+
+            const default_rows = [
+                { type_of_signer: "First Party", signer_ref_id: "S1", sequence: 1 },
+                { type_of_signer: "Second Party", signer_ref_id: "S2", sequence: 2 },
+                { type_of_signer: "Witness 1", signer_ref_id: "S3", sequence: 3 },
+                { type_of_signer: "Witness 2", signer_ref_id: "S4", sequence: 4 }
+            ];
+
+            default_rows.forEach(row => {
+                let child = frm.add_child('signer_info_table');
+                Object.assign(child, row);
+            });
+
+            frm.refresh_field('signer_info_table');
+        }
+
+        let grid = frm.get_field('signer_info_table').grid;
+
+        // ❌ Disable buttons
+        grid.cannot_add_rows = true;
+
+        // ❌ Hide Add Row button (IMPORTANT)
+        $(frm.wrapper).find('.grid-add-row').hide();
+    }
+
+});

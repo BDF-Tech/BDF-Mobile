@@ -169,8 +169,12 @@ class Estampingandsigning(Document):
                 "appearance": [
                     {
                         "id": "_a7e1z830r",
-                        "x1": 82, "y1": 164, "x2": 192, "y2": 204,
-                        "page_height": 842.04, "page_width": 595.32,
+            "x1": 69,
+            "y1": 436,
+            "x2": 179,
+            "y2": 476,
+            "page_height": 842.04,
+            "page_width": 595.32,
                         "page": user_page  # Matches the outer page array
                     }
                 ]
@@ -182,9 +186,13 @@ class Estampingandsigning(Document):
                 "page": [user_page],  # Dynamic page from user input
                 "appearance": [
                     {
-                        "id": "_ril0b38h6",
-                        "x1": 85, "y1": 235, "x2": 195, "y2": 275,
-                        "page_height": 842.04, "page_width": 595.32,
+                         "id": "_ril0b38h6",
+            "x1": 69,
+            "y1": 583,
+            "x2": 179,
+            "y2": 623,
+            "page_height": 842.04,
+            "page_width": 595.32,
                         "page": user_page  # Matches the outer page array
                     }
                 ]

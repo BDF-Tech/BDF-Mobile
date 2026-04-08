@@ -21,11 +21,10 @@
  ],
  "fields": [
   {
-   "columns": 1,
    "fieldname": "signer_ref_id",
    "fieldtype": "Data",
-   "in_list_view": 1,
-   "label": "Signer ref id"
+   "label": "Signer ref id",
+   "read_only": 1
   },
   {
    "columns": 2,
@@ -35,7 +34,7 @@
    "label": "Signer Name"
   },
   {
-   "columns": 2,
+   "columns": 3,
    "fieldname": "signer_email",
    "fieldtype": "Data",
    "in_list_view": 1,
@@ -60,7 +59,8 @@
    "fieldname": "page_number",
    "fieldtype": "Data",
    "in_list_view": 1,
-   "label": "Page Number"
+   "label": "Page Number",
+   "mandatory_depends_on": "eval:doc.type_of_signer=='Witness 1' || doc.type_of_signer=='Witness 2'"
   },
   {
    "fieldname": "appearance",
@@ -90,27 +90,27 @@
    "read_only": 1
   },
   {
-   "columns": 1,
+   "default": "DOC1",
    "fieldname": "document_to_be_signed",
    "fieldtype": "Data",
-   "in_list_view": 1,
    "label": "Document to be signed",
    "read_only": 1
   },
   {
-   "columns": 1,
+   "columns": 2,
    "fieldname": "type_of_signer",
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Type of Signer",
-   "options": "First Party\nSecond Party\nWitness 1\nWitness 2"
+   "options": "First Party\nSecond Party\nWitness 1\nWitness 2",
+   "read_only": 1
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "istable": 1,
  "links": [],
- "modified": "2026-03-30 17:26:26.922598",
+ "modified": "2026-04-08 14:53:04.263026",
  "modified_by": "Administrator",
  "module": "Mobile",
  "name": "Signers Info",
