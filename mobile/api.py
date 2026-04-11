@@ -11,8 +11,6 @@ from frappe.utils import flt, now_datetime
 # =========================================================
 # 🛠️ HELPER: RESOLVE CUSTOMER FROM LOGGED-IN USER
 # =========================================================
-
-
 def get_logged_in_customer():
     """
     Finds the Customer linked to the current session user.
@@ -45,6 +43,7 @@ def get_logged_in_customer():
 # 📅 HELPER: DATE FILTERS (UPDATED)
 # =========================================================
 
+
 def get_date_range(filter_type, start_date=None, end_date=None):
     """
     Logic: 
@@ -68,6 +67,7 @@ def get_date_range(filter_type, start_date=None, end_date=None):
 # 📦 ITEM CATALOG API
 # =========================================================
 
+
 @frappe.whitelist()
 def get_item_list():
     try:
@@ -81,7 +81,7 @@ def get_item_list():
         customer_details = frappe.db.get_value(
             "Customer",
             customer_id,
-            ["default_price_list", "customer_group", "custom_app_template"],  # 🔥 added template
+            ["default_price_list", "customer_group", "custom_app_template"],
             as_dict=True
         )
 
@@ -101,7 +101,7 @@ def get_item_list():
                 "selling_price_list"
             ) or "Standard Selling"
 
-        # --- STEP 3: GET TEMPLATE ITEMS (REPLACED LOGIC) ---
+        # --- STEP 3: GET TEMPLATE ITEMS ---
         template = customer_details.get("custom_app_template")
 
         if not template:
@@ -116,7 +116,6 @@ def get_item_list():
             fields=["item as item_code", "uom"]
         )
 
-        # 🛑 STRICT: No template items → no result
         if not allowed_rows:
             return []
 
@@ -124,7 +123,7 @@ def get_item_list():
         allowed_item_codes = tuple(set(r.item_code for r in allowed_rows))
         allowed_uom_map = set(f"{r.item_code}_{r.uom}" for r in allowed_rows)
 
-        # --- STEP 4: Main Item Query (UNCHANGED) ---
+        # --- STEP 4: Main Item Query ---
         items = frappe.db.sql("""
             SELECT
                 i.item_code, i.item_name, i.image, i.item_group,
@@ -146,24 +145,24 @@ def get_item_list():
         if not items:
             return []
 
-        # --- STEP 5: Bulk Fetch UOMs (UNCHANGED but optimized filter) ---
+        # --- STEP 5: Bulk Fetch UOMs ---
         all_uoms = frappe.db.get_all(
             "UOM Conversion Detail",
             filters={"parent": ["in", allowed_item_codes]},
             fields=["parent", "uom", "conversion_factor"]
         )
 
+        from collections import defaultdict
         uom_lookup = defaultdict(list)
         for u in all_uoms:
             uom_lookup[u.parent].append(u)
 
         result = []
 
-        # --- STEP 6: Processing (UNCHANGED CORE LOGIC) ---
+        # --- STEP 6: Processing ---
         for item in items:
             item_uom_rows = uom_lookup.get(item.item_code, [])
 
-            # 🔥 faster dict creation
             uom_map = {row.uom: row.conversion_factor for row in item_uom_rows}
 
             if item.stock_uom not in uom_map:
@@ -185,6 +184,7 @@ def get_item_list():
 
             if not item.item_code:
                 continue
+
             result.append({
                 "item_code": item.item_code,
                 "item_name": item.item_name,
@@ -196,14 +196,33 @@ def get_item_list():
                 "price_list": price_list
             })
 
+        # =========================================================
+        # 🔥 STEP 7: GROUP-WISE SORTING (NEW LOGIC)
+        # =========================================================
+
+        category_priority = {
+            "Milk FG": 1,
+            "Dahi FG": 2,
+            "Paneer FG": 3,
+            "Paneer FG": 4
+        }
+
+        result.sort(key=lambda x: (
+            category_priority.get(x.get("item_group"), 999),
+            x.get("item_name", "")
+        ))
+
+        # =========================================================
+
         return result
 
     except Exception as e:
         frappe.log_error(frappe.get_traceback(), "get_item_list Error")
+        # =========================================================
         return {"error": str(e)}
-# =========================================================
 # 📊 DASHBOARD API
 # =========================================================
+
 
 @frappe.whitelist()
 def get_my_dashboard_stats():
@@ -220,7 +239,6 @@ def get_my_dashboard_stats():
 # =========================================================
 # 🛒 ORDER PLACEMENT API
 # =========================================================
-
 
 
 @frappe.whitelist()
@@ -305,8 +323,9 @@ def place_order(items, req_date=None, req_shift=None, po_no=None):
 
     except Exception as e:
         frappe.log_error(frappe.get_traceback(), "Order Error")
-        return {"status": "error", "message": str(e)}    
+        return {"status": "error", "message": str(e)}
 # =========================================================
+
 
 @frappe.whitelist()
 def get_order_list(filter_type="Last 7 Days", start_date=None, end_date=None):
@@ -363,6 +382,7 @@ def get_order_details(order_id):
 # 🧾 SALES INVOICE LIST (UPDATED)
 # =========================================================
 
+
 @frappe.whitelist()
 def get_invoice_list(filter_type="Last 7 Days", start_date=None, end_date=None):
     """
@@ -386,9 +406,10 @@ def get_invoice_list(filter_type="Last 7 Days", start_date=None, end_date=None):
                                   )
     return invoices
 
+
 @frappe.whitelist()
 def get_invoice_details(invoice_id=None):
-    
+
     # 🔥 If not provided → return safe response
     if not invoice_id:
         return {
@@ -437,7 +458,6 @@ def get_invoice_details(invoice_id=None):
 # 📒 LEDGER REPORT
 # =========================================================
 
-import frappe
 
 @frappe.whitelist()
 def get_customer_ledger(filter_type="This Year", start_date=None, end_date=None, voucher_type=None, selected_company=None):
@@ -530,6 +550,7 @@ def get_customer_ledger(filter_type="This Year", start_date=None, end_date=None,
 # 👤 PROFILE API
 # =========================================================
 
+
 @frappe.whitelist()
 def get_user_profile():
     try:
@@ -583,6 +604,7 @@ def get_user_profile():
     except Exception as e:
         frappe.log_error(f"Profile Error: {str(e)}")
         return {"error": str(e)}
+
 
 '''@frappe.whitelist()
 def fetch_customer_catalog(customer_id):
@@ -646,10 +668,13 @@ def fetch_customer_catalog(customer_id):
 
     return f"Successfully fetched catalog. Auto-enabled {enabled_count} default UOMs."
 '''
+
+
 @frappe.whitelist(allow_guest=True)
 def s(v=None):
     # Pass 'v' from the URL to your main function
     return capture_scale_data(w=v)
+
 
 @frappe.whitelist()
 def fetch_template_items(template_name):
