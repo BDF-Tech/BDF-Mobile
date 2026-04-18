@@ -42,8 +42,6 @@ def get_logged_in_customer():
 # =========================================================
 # 📅 HELPER: DATE FILTERS (UPDATED)
 # =========================================================
-
-
 def get_date_range(filter_type, start_date=None, end_date=None):
     """
     Logic: 
@@ -66,8 +64,6 @@ def get_date_range(filter_type, start_date=None, end_date=None):
 # =========================================================
 # 📦 ITEM CATALOG API
 # =========================================================
-
-
 @frappe.whitelist()
 def get_item_list():
     try:
@@ -222,8 +218,6 @@ def get_item_list():
         return {"error": str(e)}
 # 📊 DASHBOARD API
 # =========================================================
-
-
 @frappe.whitelist()
 def get_my_dashboard_stats():
     customer_id = get_logged_in_customer()
@@ -239,8 +233,6 @@ def get_my_dashboard_stats():
 # =========================================================
 # 🛒 ORDER PLACEMENT API
 # =========================================================
-
-
 @frappe.whitelist()
 def place_order(items, req_date=None, req_shift=None, po_no=None):
     try:
@@ -325,8 +317,6 @@ def place_order(items, req_date=None, req_shift=None, po_no=None):
         frappe.log_error(frappe.get_traceback(), "Order Error")
         return {"status": "error", "message": str(e)}
 # =========================================================
-
-
 @frappe.whitelist()
 def get_order_list(filter_type="Last 7 Days", start_date=None, end_date=None):
     """
@@ -349,8 +339,6 @@ def get_order_list(filter_type="Last 7 Days", start_date=None, end_date=None):
                                 order_by="transaction_date desc"
                                 )
     return orders
-
-
 @frappe.whitelist()
 def get_order_details(order_id):
     if not frappe.db.exists("Sales Order", order_id):
@@ -381,8 +369,6 @@ def get_order_details(order_id):
 # =========================================================
 # 🧾 SALES INVOICE LIST (UPDATED)
 # =========================================================
-
-
 @frappe.whitelist()
 def get_invoice_list(filter_type="Last 7 Days", start_date=None, end_date=None):
     """
@@ -405,7 +391,6 @@ def get_invoice_list(filter_type="Last 7 Days", start_date=None, end_date=None):
                                   order_by="posting_date desc"
                                   )
     return invoices
-
 
 @frappe.whitelist()
 def get_invoice_details(invoice_id=None):
@@ -457,8 +442,6 @@ def get_invoice_details(invoice_id=None):
 # =========================================================
 # 📒 LEDGER REPORT
 # =========================================================
-
-
 @frappe.whitelist()
 def get_customer_ledger(filter_type="This Year", start_date=None, end_date=None, voucher_type=None, selected_company=None):
     # (Assuming get_logged_in_customer and get_date_range are defined elsewhere in your file)
@@ -549,8 +532,6 @@ def get_customer_ledger(filter_type="This Year", start_date=None, end_date=None,
 # =========================================================
 # 👤 PROFILE API
 # =========================================================
-
-
 @frappe.whitelist()
 def get_user_profile():
     try:
@@ -604,7 +585,6 @@ def get_user_profile():
     except Exception as e:
         frappe.log_error(f"Profile Error: {str(e)}")
         return {"error": str(e)}
-
 
 '''@frappe.whitelist()
 def fetch_customer_catalog(customer_id):
@@ -669,12 +649,10 @@ def fetch_customer_catalog(customer_id):
     return f"Successfully fetched catalog. Auto-enabled {enabled_count} default UOMs."
 '''
 
-
 @frappe.whitelist(allow_guest=True)
 def s(v=None):
     # Pass 'v' from the URL to your main function
     return capture_scale_data(w=v)
-
 
 @frappe.whitelist()
 def fetch_template_items(template_name):
