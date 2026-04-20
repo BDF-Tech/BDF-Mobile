@@ -30,7 +30,6 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
         fieldtype: 'Date'
     });
 
-    // ✅ NEW FILTER (ADDED, nothing removed)
     let view_by = page.add_field({
         label: 'View By',
         fieldtype: 'Select',
@@ -64,7 +63,6 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
 
     page.set_primary_action('Load Data', () => {
 
-        // ✅ SWITCH LOGIC (ADDED)
         if (view_by.get_value() === "Top Customers") {
             load_top_customers();
         } else {
@@ -75,7 +73,7 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
     });
 
     // ======================
-    // TOP SECTION (REUSED)
+    // TOP SECTION
     // ======================
 
     let top_section = $(`
@@ -86,7 +84,7 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
     `).appendTo(page.body);
 
     // ======================
-    // TOP CUSTOMERS (EXISTING)
+    // TOP CUSTOMERS
     // ======================
 
     function load_top_customers() {
@@ -145,7 +143,7 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
     }
 
     // ======================
-    // TERRITORY SALES (NEW)
+    // TERRITORY SALES (WITH GROWTH)
     // ======================
 
     function load_territory_sales() {
@@ -167,6 +165,9 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
 
                 r.message.forEach((row, index) => {
 
+                    let growth_color = row.growth >= 0 ? "#16a34a" : "#dc2626";
+                    let arrow = row.growth >= 0 ? "▲" : "▼";
+
                     let card = $(`
                         <div style="
                             width:260px;
@@ -177,11 +178,17 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
                             box-shadow:0 2px 6px rgba(0,0,0,0.05);
                         ">
                             <div style="font-size:12px;color:#999;">#${index+1}</div>
+
                             <div style="font-weight:600;font-size:15px;">
                                 ${row.territory || "No Territory"}
                             </div>
-                            <div style="margin-top:10px;font-size:18px;font-weight:700;color:#2563eb;">
+
+                            <div style="margin-top:8px;font-size:18px;font-weight:700;color:#2563eb;">
                                 ${format_currency(row.total)}
+                            </div>
+
+                            <div style="margin-top:6px;font-size:13px;color:${growth_color};font-weight:600;">
+                                ${arrow} ${Math.abs(row.growth)}%
                             </div>
                         </div>
                     `);
@@ -193,7 +200,7 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
     }
 
     // ======================
-    // CHART (EXISTING)
+    // CHART
     // ======================
 
     let chart_section = $(`
@@ -206,68 +213,51 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
     let chart;
 
     function load_chart() {
-    frappe.call({
-        method: 'mobile.mobile.page.sales_analytics_dash.sales_analytics_dash.get_sales_trend',
-        args: {
-            from_date: from_date.get_value(),
-            to_date: to_date.get_value(),
-            period: period.get_value()
-        },
-        callback: function(r) {
+        frappe.call({
+            method: 'mobile.mobile.page.sales_analytics_dash.sales_analytics_dash.get_sales_trend',
+            args: {
+                from_date: from_date.get_value(),
+                to_date: to_date.get_value(),
+                period: period.get_value()
+            },
+            callback: function(r) {
 
-            if (!r.message || r.message.length === 0) {
-                $("#chart").html("<p>No Data Found</p>");
-                return;
-            }
-
-            let labels = r.message.map(d => d.label);
-            let values = r.message.map(d => d.total);
-
-            // ✅ Calculate % change
-            let percent_change = values.map((val, i) => {
-                if (i === 0) return 0;
-                let prev = values[i - 1] || 1;
-                return (((val - prev) / prev) * 100).toFixed(1);
-            });
-
-            if (chart) chart.destroy();
-
-            chart = new frappe.Chart("#chart", {
-                title: "Sales Trend",
-                data: {
-                    labels: labels,
-                    datasets: [
-                        {
-                            name: "Sales Amount",
-                            values: values
-                        },
-                        {
-                            name: "% Growth",
-                            values: percent_change
-                        }
-                    ]
-                },
-                type: 'axis-mixed',   // ✅ intelligent combo
-                height: 320,
-                axisOptions: {
-                    xAxisMode: 'tick',
-                    xIsSeries: true
-                },
-                lineOptions: {
-                    spline: true
-                },
-                tooltipOptions: {
-                    formatTooltipY: d => format_currency(d)
+                if (!r.message || r.message.length === 0) {
+                    $("#chart").html("<p>No Data Found</p>");
+                    return;
                 }
-            });
 
-            // ✅ Improve label readability
-            setTimeout(() => {
-                $("#chart svg text").css({
-                    "font-size": "11px"
+                let labels = r.message.map(d => d.label);
+                let values = r.message.map(d => d.total);
+
+                let percent_change = values.map((val, i) => {
+                    if (i === 0) return 0;
+                    let prev = values[i - 1] || 1;
+                    return (((val - prev) / prev) * 100).toFixed(1);
                 });
-            }, 500);
-        }
-    });
-}
+
+                if (chart) chart.destroy();
+
+                chart = new frappe.Chart("#chart", {
+                    title: "Sales Trend",
+                    data: {
+                        labels: labels,
+                        datasets: [
+                            { name: "Sales", values: values },
+                            { name: "% Growth", values: percent_change }
+                        ]
+                    },
+                    type: 'axis-mixed',
+                    height: 320,
+                    lineOptions: {
+                        spline: true
+                    },
+                    tooltipOptions: {
+                        formatTooltipY: d => format_currency(d)
+                    }
+                });
+            }
+        });
+    }
+
 };
