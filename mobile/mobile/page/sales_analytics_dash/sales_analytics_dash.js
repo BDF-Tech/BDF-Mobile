@@ -7,6 +7,74 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
     });
 
     // ======================
+    // LOADER (PROFESSIONAL VERSION)
+    // ======================
+
+    let loader = $(`
+    <div id="dashboard-loader" style="
+        position:fixed;
+        top:0;
+        left:0;
+        width:100%;
+        height:100%;
+        background: rgba(255, 255, 255, 0.7);
+        backdrop-filter: blur(4px);
+        display:none;
+        align-items:center;
+        justify-content:center;
+        z-index:10001;
+        transition: all 0.3s ease;
+    ">
+        <div class="loader-container" style="text-align:center;">
+            <div class="modern-spinner">
+                <div></div><div></div><div></div><div></div>
+            </div>
+            <div style="margin-top:15px; font-weight:500; color:#1f2937; letter-spacing:0.5px; font-size:13px;">
+                FETCHING ANALYTICS...
+            </div>
+        </div>
+    </div>
+`).appendTo('body');
+
+// Inject Professional Spinner CSS
+$(`<style>
+.modern-spinner {
+  display: inline-block;
+  position: relative;
+  width: 64px;
+  height: 64px;
+}
+.modern-spinner div {
+  box-sizing: border-box;
+  display: block;
+  position: absolute;
+  width: 51px;
+  height: 51px;
+  margin: 6px;
+  border: 4px solid #3b82f6;
+  border-radius: 50%;
+  animation: modern-spinner 1.2s cubic-bezier(0.5, 0, 0.5, 1) infinite;
+  border-color: #3b82f6 transparent transparent transparent;
+}
+.modern-spinner div:nth-child(1) { animation-delay: -0.45s; }
+.modern-spinner div:nth-child(2) { animation-delay: -0.3s; }
+.modern-spinner div:nth-child(3) { animation-delay: -0.15s; }
+
+@keyframes modern-spinner {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+</style>`).appendTo('head');
+
+    function show_loader() {
+        $("#dashboard-loader").css('display', 'flex').hide().fadeIn(200);
+    }
+
+    function hide_loader() {
+        $("#dashboard-loader").fadeOut(200);
+    }
+
+    // ======================
     // FILTERS
     // ======================
 
@@ -63,13 +131,14 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
 
     page.set_primary_action('Load Data', () => {
 
+        show_loader();   // ✅ START LOADER
+
         if (view_by.get_value() === "Top Customers") {
             load_top_customers();
         } else {
             load_territory_sales();
         }
 
-        load_chart();
     });
 
     // ======================
@@ -101,6 +170,7 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
 
                 if (!r.message || r.message.length === 0) {
                     container.html("<p>No Data Found</p>");
+                    hide_loader();   // ✅ STOP LOADER
                     return;
                 }
 
@@ -138,12 +208,14 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
 
                     container.append(card);
                 });
+
+                hide_loader();   // ✅ STOP LOADER
             }
         });
     }
 
     // ======================
-    // TERRITORY SALES (WITH GROWTH)
+    // TERRITORY SALES
     // ======================
 
     function load_territory_sales() {
@@ -160,6 +232,7 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
 
                 if (!r.message || r.message.length === 0) {
                     container.html("<p>No Data Found</p>");
+                    hide_loader();   // ✅ STOP LOADER
                     return;
                 }
 
@@ -195,67 +268,8 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
 
                     container.append(card);
                 });
-            }
-        });
-    }
 
-    // ======================
-    // CHART
-    // ======================
-
-    let chart_section = $(`
-        <div style="margin-top:40px;">
-            <h3>Sales Trend</h3>
-            <div id="chart"></div>
-        </div>
-    `).appendTo(page.body);
-
-    let chart;
-
-    function load_chart() {
-        frappe.call({
-            method: 'mobile.mobile.page.sales_analytics_dash.sales_analytics_dash.get_sales_trend',
-            args: {
-                from_date: from_date.get_value(),
-                to_date: to_date.get_value(),
-                period: period.get_value()
-            },
-            callback: function(r) {
-
-                if (!r.message || r.message.length === 0) {
-                    $("#chart").html("<p>No Data Found</p>");
-                    return;
-                }
-
-                let labels = r.message.map(d => d.label);
-                let values = r.message.map(d => d.total);
-
-                let percent_change = values.map((val, i) => {
-                    if (i === 0) return 0;
-                    let prev = values[i - 1] || 1;
-                    return (((val - prev) / prev) * 100).toFixed(1);
-                });
-
-                if (chart) chart.destroy();
-
-                chart = new frappe.Chart("#chart", {
-                    title: "Sales Trend",
-                    data: {
-                        labels: labels,
-                        datasets: [
-                            { name: "Sales", values: values },
-                            { name: "% Growth", values: percent_change }
-                        ]
-                    },
-                    type: 'axis-mixed',
-                    height: 320,
-                    lineOptions: {
-                        spline: true
-                    },
-                    tooltipOptions: {
-                        formatTooltipY: d => format_currency(d)
-                    }
-                });
+                hide_loader();   // ✅ STOP LOADER
             }
         });
     }
