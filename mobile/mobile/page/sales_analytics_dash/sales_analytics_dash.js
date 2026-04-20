@@ -7,71 +7,64 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
     });
 
     // ======================
-    // LOADER (PROFESSIONAL VERSION)
+    // LOADER (PROFESSIONAL)
     // ======================
 
     let loader = $(`
-    <div id="dashboard-loader" style="
-        position:fixed;
-        top:0;
-        left:0;
-        width:100%;
-        height:100%;
-        background: rgba(255, 255, 255, 0.7);
-        backdrop-filter: blur(4px);
-        display:none;
-        align-items:center;
-        justify-content:center;
-        z-index:10001;
-        transition: all 0.3s ease;
-    ">
-        <div class="loader-container" style="text-align:center;">
+        <div id="dashboard-loader" style="
+            position:fixed;
+            top:0;
+            left:0;
+            width:100%;
+            height:100%;
+            background: rgba(255,255,255,0.7);
+            backdrop-filter: blur(4px);
+            display:none;
+            align-items:center;
+            justify-content:center;
+            z-index:10001;
+        ">
             <div class="modern-spinner">
                 <div></div><div></div><div></div><div></div>
             </div>
-            <div style="margin-top:15px; font-weight:500; color:#1f2937; letter-spacing:0.5px; font-size:13px;">
-                FETCHING ANALYTICS...
-            </div>
         </div>
-    </div>
-`).appendTo('body');
+    `).appendTo('body');
 
-// Inject Professional Spinner CSS
-$(`<style>
-.modern-spinner {
-  display: inline-block;
-  position: relative;
-  width: 64px;
-  height: 64px;
-}
-.modern-spinner div {
-  box-sizing: border-box;
-  display: block;
-  position: absolute;
-  width: 51px;
-  height: 51px;
-  margin: 6px;
-  border: 4px solid #3b82f6;
-  border-radius: 50%;
-  animation: modern-spinner 1.2s cubic-bezier(0.5, 0, 0.5, 1) infinite;
-  border-color: #3b82f6 transparent transparent transparent;
-}
-.modern-spinner div:nth-child(1) { animation-delay: -0.45s; }
-.modern-spinner div:nth-child(2) { animation-delay: -0.3s; }
-.modern-spinner div:nth-child(3) { animation-delay: -0.15s; }
+    $(`<style>
+    .modern-spinner {
+      display: inline-block;
+      position: relative;
+      width: 64px;
+      height: 64px;
+    }
+    .modern-spinner div {
+      box-sizing: border-box;
+      display: block;
+      position: absolute;
+      width: 51px;
+      height: 51px;
+      margin: 6px;
+      border: 4px solid #3b82f6;
+      border-radius: 50%;
+      animation: modern-spinner 1.2s linear infinite;
+      border-color: #3b82f6 transparent transparent transparent;
+    }
+    .modern-spinner div:nth-child(1) { animation-delay: -0.45s; }
+    .modern-spinner div:nth-child(2) { animation-delay: -0.3s; }
+    .modern-spinner div:nth-child(3) { animation-delay: -0.15s; }
 
-@keyframes modern-spinner {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
-}
-</style>`).appendTo('head');
+    @keyframes modern-spinner {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    </style>`).appendTo('head');
 
     function show_loader() {
-        $("#dashboard-loader").css('display', 'flex').hide().fadeIn(200);
+        $("#dashboard-loader").css('display','flex');
     }
 
     function hide_loader() {
-        $("#dashboard-loader").fadeOut(200);
+        $("#dashboard-loader").hide();
     }
 
     // ======================
@@ -131,7 +124,7 @@ $(`<style>
 
     page.set_primary_action('Load Data', () => {
 
-        show_loader();   // ✅ START LOADER
+        show_loader();
 
         if (view_by.get_value() === "Top Customers") {
             load_top_customers();
@@ -153,6 +146,19 @@ $(`<style>
     `).appendTo(page.body);
 
     // ======================
+    // TERRITORY CHART SECTION
+    // ======================
+
+    let territory_chart_section = $(`
+        <div style="margin-top:30px;">
+            <h3>Territory Sales Distribution</h3>
+            <div id="territory-chart"></div>
+        </div>
+    `).appendTo(page.body);
+
+    let territory_chart;
+
+    // ======================
     // TOP CUSTOMERS
     // ======================
 
@@ -170,7 +176,7 @@ $(`<style>
 
                 if (!r.message || r.message.length === 0) {
                     container.html("<p>No Data Found</p>");
-                    hide_loader();   // ✅ STOP LOADER
+                    hide_loader();
                     return;
                 }
 
@@ -179,43 +185,26 @@ $(`<style>
                     let highlight = index < 3 ? 'border:2px solid #16a34a;' : '';
 
                     let card = $(`
-                        <div style="
-                            width:260px;
-                            padding:16px;
-                            border-radius:12px;
-                            background:#fff;
-                            border:1px solid #e5e7eb;
-                            box-shadow:0 2px 6px rgba(0,0,0,0.05);
-                            cursor:pointer;
-                            ${highlight}
-                        ">
-                            <div style="font-size:12px;color:#999;">#${index+1}</div>
-                            <div style="font-weight:600;font-size:15px;">
-                                ${cust.customer_name || cust.customer}
-                            </div>
-                            <div style="font-size:12px;color:#666;">
-                                ${cust.customer}
-                            </div>
-                            <div style="margin-top:10px;font-size:18px;font-weight:700;color:#16a34a;">
+                        <div style="width:260px;padding:16px;border-radius:12px;background:#fff;border:1px solid #e5e7eb;${highlight}">
+                            <div>#${index+1}</div>
+                            <div>${cust.customer_name || cust.customer}</div>
+                            <div>${cust.customer}</div>
+                            <div style="color:#16a34a;font-weight:bold;">
                                 ${format_currency(cust.total)}
                             </div>
                         </div>
                     `);
 
-                    card.on("click", () => {
-                        frappe.set_route("Form", "Customer", cust.customer);
-                    });
-
                     container.append(card);
                 });
 
-                hide_loader();   // ✅ STOP LOADER
+                hide_loader();
             }
         });
     }
 
     // ======================
-    // TERRITORY SALES
+    // TERRITORY SALES + BAR CHART
     // ======================
 
     function load_territory_sales() {
@@ -232,35 +221,24 @@ $(`<style>
 
                 if (!r.message || r.message.length === 0) {
                     container.html("<p>No Data Found</p>");
-                    hide_loader();   // ✅ STOP LOADER
+                    hide_loader();
                     return;
                 }
 
+                // Cards
                 r.message.forEach((row, index) => {
 
                     let growth_color = row.growth >= 0 ? "#16a34a" : "#dc2626";
                     let arrow = row.growth >= 0 ? "▲" : "▼";
 
                     let card = $(`
-                        <div style="
-                            width:260px;
-                            padding:16px;
-                            border-radius:12px;
-                            background:#fff;
-                            border:1px solid #e5e7eb;
-                            box-shadow:0 2px 6px rgba(0,0,0,0.05);
-                        ">
-                            <div style="font-size:12px;color:#999;">#${index+1}</div>
-
-                            <div style="font-weight:600;font-size:15px;">
-                                ${row.territory || "No Territory"}
-                            </div>
-
-                            <div style="margin-top:8px;font-size:18px;font-weight:700;color:#2563eb;">
+                        <div style="width:260px;padding:16px;border-radius:12px;background:#fff;border:1px solid #e5e7eb;">
+                            <div>#${index+1}</div>
+                            <div>${row.territory}</div>
+                            <div style="color:#2563eb;font-weight:bold;">
                                 ${format_currency(row.total)}
                             </div>
-
-                            <div style="margin-top:6px;font-size:13px;color:${growth_color};font-weight:600;">
+                            <div style="color:${growth_color};">
                                 ${arrow} ${Math.abs(row.growth)}%
                             </div>
                         </div>
@@ -269,7 +247,42 @@ $(`<style>
                     container.append(card);
                 });
 
-                hide_loader();   // ✅ STOP LOADER
+                // ✅ FIXED VALUES (IMPORTANT)
+                let labels = r.message.map(d => d.territory || "No Territory");
+                let values = r.message.map(d => Number(d.total) || 0);
+
+                if (territory_chart) territory_chart.destroy();
+
+                territory_chart = new frappe.Chart("#territory-chart", {
+    title: "Sales by Territory",
+    data: {
+        labels: labels,
+        datasets: [
+            {
+                name: "Sales",
+                values: values.map(v => parseFloat(v) || 0)  // ✅ force number
+            }
+        ]
+    },
+    type: 'bar',
+    height: 320,
+
+    axisOptions: {
+        xAxisMode: 'tick',
+        xIsSeries: true,
+        yAxisMode: 'span'   // ✅ IMPORTANT FIX
+    },
+
+    barOptions: {
+        spaceRatio: 0.3
+    },
+
+    tooltipOptions: {
+        formatTooltipY: d => format_currency(d)
+    }
+});
+
+                hide_loader();
             }
         });
     }
