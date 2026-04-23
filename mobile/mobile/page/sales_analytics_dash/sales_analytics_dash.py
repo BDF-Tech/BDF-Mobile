@@ -1,114 +1,114 @@
 import frappe
 from datetime import datetime, timedelta
 
+def _get_filter_query(customer_group, item_group):
+    conditions = ["si.docstatus = 1"]
+    values = {}
+    join_clause = ""
+    amount_field = "si.base_grand_total"
 
-# =========================
-# SALES TREND (UNCHANGED)
-# =========================
-@frappe.whitelist()
-def get_sales_trend(from_date=None, to_date=None, period=None):
+    if customer_group:
+        conditions.append("si.customer_group = %(customer_group)s")
+        values["customer_group"] = customer_group
 
-    if period == "Weekly":
-        group_by = "YEARWEEK(posting_date)"
-        label = "YEARWEEK(posting_date)"
+    if item_group:
+        join_clause = "JOIN `tabSales Invoice Item` sii ON sii.parent = si.name"
+        amount_field = "sii.base_amount"
+        conditions.append("sii.item_group = %(item_group)s")
+        values["item_group"] = item_group
 
-    elif period == "Monthly":
-        group_by = "DATE_FORMAT(posting_date, '%%Y-%%m')"
-        label = "DATE_FORMAT(posting_date, '%%b %%Y')"
+    return " AND ".join(conditions), values, join_clause, amount_field
 
-    elif period == "Quarterly":
-        group_by = "QUARTER(posting_date)"
-        label = "CONCAT('Q', QUARTER(posting_date))"
 
-    elif period == "Yearly":
-        group_by = "YEAR(posting_date)"
-        label = "YEAR(posting_date)"
-
-    else:
-        group_by = "DATE(posting_date)"
-        label = "DATE(posting_date)"
+def get_top_customers(from_date=None, to_date=None, customer_group=None, item_group=None, ranking="Top 10"):
+    base_where, values, join_clause, amount_field = _get_filter_query(customer_group, item_group)
+    
+    values["from_date"] = from_date
+    values["to_date"] = to_date
+    where_clause = f"{base_where} AND si.posting_date BETWEEN %(from_date)s AND %(to_date)s"
+    order_by = "ASC" if ranking == "Lowest 10" else "DESC"
 
     return frappe.db.sql(f"""
         SELECT 
-            {label} as label,
-            SUM(base_grand_total) as total
-        FROM `tabSales Invoice`
-        WHERE docstatus = 1
-        AND posting_date BETWEEN %s AND %s
-        GROUP BY {group_by}
-        ORDER BY posting_date
-    """, (from_date, to_date), as_dict=True)
-
-
-# =========================
-# TOP CUSTOMERS (UNCHANGED)
-# =========================
-@frappe.whitelist()
-def get_top_customers(from_date=None, to_date=None):
-    return frappe.db.sql("""
-        SELECT 
-            customer,
-            customer_name,
-            SUM(base_grand_total) as total
-        FROM `tabSales Invoice`
-        WHERE docstatus = 1
-        AND posting_date BETWEEN %s AND %s
-        GROUP BY customer, customer_name
-        ORDER BY total DESC
+            si.customer,
+            si.customer_name,
+            SUM({amount_field}) as total
+        FROM `tabSales Invoice` si
+        {join_clause}
+        WHERE {where_clause}
+        GROUP BY si.customer, si.customer_name
+        ORDER BY total {order_by}
         LIMIT 10
-    """, (from_date, to_date), as_dict=True)
+    """, values, as_dict=True)
 
 
-# =========================
-# TERRITORY WITH GROWTH (NEW LOGIC)
-# =========================
-@frappe.whitelist()
-def get_territory_sales(from_date=None, to_date=None):
+def get_top_items(from_date=None, to_date=None, customer_group=None, item_group=None, ranking="Top 10"):
+    base_where, values, join_clause, _ = _get_filter_query(customer_group, item_group)
+    
+    if not join_clause:
+        join_clause = "JOIN `tabSales Invoice Item` sii ON sii.parent = si.name"
+    
+    join_clause += " JOIN `tabItem` i ON i.name = sii.item_code"
+    base_where += " AND i.is_sales_item = 1"
+    
+    amount_field = "sii.base_amount"
+    values["from_date"] = from_date
+    values["to_date"] = to_date
+    where_clause = f"{base_where} AND si.posting_date BETWEEN %(from_date)s AND %(to_date)s"
+    order_by = "ASC" if ranking == "Lowest 10" else "DESC"
 
-    # convert to date
+    return frappe.db.sql(f"""
+        SELECT 
+            sii.item_code,
+            sii.item_name,
+            SUM({amount_field}) as total
+        FROM `tabSales Invoice` si
+        {join_clause}
+        WHERE {where_clause}
+        GROUP BY sii.item_code, sii.item_name
+        ORDER BY total {order_by}
+        LIMIT 10
+    """, values, as_dict=True)
+
+
+def get_territory_sales(from_date=None, to_date=None, customer_group=None, item_group=None, ranking="Top 10"):
     from_dt = datetime.strptime(from_date, "%Y-%m-%d")
     to_dt = datetime.strptime(to_date, "%Y-%m-%d")
-
-    # calculate previous period
     diff = (to_dt - from_dt).days
 
-    prev_from = from_dt - timedelta(days=diff)
-    prev_to = to_dt - timedelta(days=diff)
+    prev_from = (from_dt - timedelta(days=diff)).strftime("%Y-%m-%d")
+    prev_to = (to_dt - timedelta(days=diff)).strftime("%Y-%m-%d")
 
-    # current period
-    current = frappe.db.sql("""
-        SELECT 
-            territory,
-            SUM(base_grand_total) as total
-        FROM `tabSales Invoice`
-        WHERE docstatus = 1
-        AND posting_date BETWEEN %s AND %s
-        GROUP BY territory
-    """, (from_date, to_date), as_dict=True)
+    base_where, values_base, join_clause, amount_field = _get_filter_query(customer_group, item_group)
 
-    # previous period
-    previous = frappe.db.sql("""
-        SELECT 
-            territory,
-            SUM(base_grand_total) as total
-        FROM `tabSales Invoice`
-        WHERE docstatus = 1
-        AND posting_date BETWEEN %s AND %s
-        GROUP BY territory
-    """, (prev_from, prev_to), as_dict=True)
+    values_current = values_base.copy()
+    values_current["from_date"] = from_date
+    values_current["to_date"] = to_date
+    curr_where = f"{base_where} AND si.posting_date BETWEEN %(from_date)s AND %(to_date)s"
+    
+    current = frappe.db.sql(f"""
+        SELECT si.territory, SUM({amount_field}) as total
+        FROM `tabSales Invoice` si {join_clause}
+        WHERE {curr_where} GROUP BY si.territory
+    """, values_current, as_dict=True)
 
-    # map previous
+    values_prev = values_base.copy()
+    values_prev["prev_from"] = prev_from
+    values_prev["prev_to"] = prev_to
+    prev_where = f"{base_where} AND si.posting_date BETWEEN %(prev_from)s AND %(prev_to)s"
+    
+    previous = frappe.db.sql(f"""
+        SELECT si.territory, SUM({amount_field}) as total
+        FROM `tabSales Invoice` si {join_clause}
+        WHERE {prev_where} GROUP BY si.territory
+    """, values_prev, as_dict=True)
+
     prev_map = {d.territory: d.total for d in previous}
-
     result = []
 
     for row in current:
         prev_total = prev_map.get(row.territory, 0)
-
-        if prev_total:
-            growth = ((row.total - prev_total) / prev_total) * 100
-        else:
-            growth = 100 if row.total else 0
+        growth = ((row.total - prev_total) / prev_total) * 100 if prev_total else (100 if row.total else 0)
 
         result.append({
             "territory": row.territory,
@@ -116,7 +116,30 @@ def get_territory_sales(from_date=None, to_date=None):
             "growth": round(growth, 2)
         })
 
-    # sort by total
-    result.sort(key=lambda x: x["total"], reverse=True)
+    reverse_sort = False if ranking == "Lowest 10" else True
+    result.sort(key=lambda x: x["total"], reverse=reverse_sort)
 
-    return result
+    return result[:10]
+
+
+# =========================
+# MASTER OPTIMIZED ENDPOINT
+# =========================
+@frappe.whitelist()
+def get_dashboard_data(from_date, to_date, ranking, customer_group=None, item_group=None, fetch_customers=0, fetch_items=0, fetch_territories=0):
+    """
+    Executes all required queries in a single API roundtrip. 
+    Only queries the database for the datasets explicitly requested by the frontend.
+    """
+    data = {}
+
+    if int(fetch_customers):
+        data["customers"] = get_top_customers(from_date, to_date, customer_group, item_group, ranking)
+    
+    if int(fetch_items):
+        data["items"] = get_top_items(from_date, to_date, customer_group, item_group, ranking)
+    
+    if int(fetch_territories):
+        data["territories"] = get_territory_sales(from_date, to_date, customer_group, item_group, ranking)
+
+    return data
