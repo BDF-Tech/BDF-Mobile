@@ -18,7 +18,7 @@ def get_melento_secrets():
         "esign": {
             "api_key": doc.get_password("signing_api_key"),
             "application_id": doc.get_password("signing_application_id"),
-            "url": "https://uat.signdesk.in/api/sandbox/signRequest"
+            "url": "https://api.signdesk.in/api/live/signRequest"
         }
     }
 
