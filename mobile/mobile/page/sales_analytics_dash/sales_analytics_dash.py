@@ -26,7 +26,9 @@ def get_top_customers(from_date=None, to_date=None, customer_group=None, item_gr
     values["from_date"] = from_date
     values["to_date"] = to_date
     where_clause = f"{base_where} AND si.posting_date BETWEEN %(from_date)s AND %(to_date)s"
+    
     order_by = "ASC" if ranking == "Lowest 10" else "DESC"
+    limit_clause = "" if ranking == "All" else "LIMIT 10"
 
     return frappe.db.sql(f"""
         SELECT 
@@ -38,7 +40,7 @@ def get_top_customers(from_date=None, to_date=None, customer_group=None, item_gr
         WHERE {where_clause}
         GROUP BY si.customer, si.customer_name
         ORDER BY total {order_by}
-        LIMIT 10
+        {limit_clause}
     """, values, as_dict=True)
 
 
@@ -55,19 +57,22 @@ def get_top_items(from_date=None, to_date=None, customer_group=None, item_group=
     values["from_date"] = from_date
     values["to_date"] = to_date
     where_clause = f"{base_where} AND si.posting_date BETWEEN %(from_date)s AND %(to_date)s"
+    
     order_by = "ASC" if ranking == "Lowest 10" else "DESC"
+    limit_clause = "" if ranking == "All" else "LIMIT 10"
 
     return frappe.db.sql(f"""
         SELECT 
             sii.item_code,
             sii.item_name,
+            SUM(sii.stock_qty) as total_qty,
             SUM({amount_field}) as total
         FROM `tabSales Invoice` si
         {join_clause}
         WHERE {where_clause}
         GROUP BY sii.item_code, sii.item_name
         ORDER BY total {order_by}
-        LIMIT 10
+        {limit_clause}
     """, values, as_dict=True)
 
 
@@ -119,18 +124,13 @@ def get_territory_sales(from_date=None, to_date=None, customer_group=None, item_
     reverse_sort = False if ranking == "Lowest 10" else True
     result.sort(key=lambda x: x["total"], reverse=reverse_sort)
 
+    if ranking == "All":
+        return result
     return result[:10]
 
 
-# =========================
-# MASTER OPTIMIZED ENDPOINT
-# =========================
 @frappe.whitelist()
 def get_dashboard_data(from_date, to_date, ranking, customer_group=None, item_group=None, fetch_customers=0, fetch_items=0, fetch_territories=0):
-    """
-    Executes all required queries in a single API roundtrip. 
-    Only queries the database for the datasets explicitly requested by the frontend.
-    """
     data = {}
 
     if int(fetch_customers):

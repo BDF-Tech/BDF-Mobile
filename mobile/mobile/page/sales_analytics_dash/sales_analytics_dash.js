@@ -7,7 +7,7 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
     });
 
     // ======================
-    // LOADER
+    // LOADER & CSS GUARD
     // ======================
     let loader = $(`
         <div id="dashboard-loader" style="
@@ -21,17 +21,27 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
         </div>
     `).appendTo('body');
 
-    $(`<style>
-    .modern-spinner { display: inline-block; position: relative; width: 64px; height: 64px; }
-    .modern-spinner div { box-sizing: border-box; display: block; position: absolute; width: 51px; height: 51px; margin: 6px; border: 4px solid #3b82f6; border-radius: 50%; animation: modern-spinner 1.2s linear infinite; border-color: #3b82f6 transparent transparent transparent; }
-    .modern-spinner div:nth-child(1) { animation-delay: -0.45s; }
-    .modern-spinner div:nth-child(2) { animation-delay: -0.3s; }
-    .modern-spinner div:nth-child(3) { animation-delay: -0.15s; }
-    @keyframes modern-spinner { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-    </style>`).appendTo('head');
+    // OPTIMIZATION: Prevent duplicate CSS injection on hot reloads
+    if ($('#sales-dash-styles').length === 0) {
+        $(`<style id="sales-dash-styles">
+        .modern-spinner { display: inline-block; position: relative; width: 64px; height: 64px; }
+        .modern-spinner div { box-sizing: border-box; display: block; position: absolute; width: 51px; height: 51px; margin: 6px; border: 4px solid #3b82f6; border-radius: 50%; animation: modern-spinner 1.2s linear infinite; border-color: #3b82f6 transparent transparent transparent; }
+        .modern-spinner div:nth-child(1) { animation-delay: -0.45s; }
+        .modern-spinner div:nth-child(2) { animation-delay: -0.3s; }
+        .modern-spinner div:nth-child(3) { animation-delay: -0.15s; }
+        @keyframes modern-spinner { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        </style>`).appendTo('head');
+    }
 
-    function show_loader() { $("#dashboard-loader").css('display','flex'); }
-    function hide_loader() { $("#dashboard-loader").hide(); }
+    // OPTIMIZATION: Throttle button to prevent database spamming
+    function show_loader() { 
+        $("#dashboard-loader").css('display','flex'); 
+        if (page.btn_primary) page.btn_primary.prop('disabled', true);
+    }
+    function hide_loader() { 
+        $("#dashboard-loader").hide(); 
+        if (page.btn_primary) page.btn_primary.prop('disabled', false);
+    }
 
     // ======================
     // DYNAMIC FILTERS
@@ -72,7 +82,8 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
 
     let from_date = page.add_field({ label: 'From Date', fieldtype: 'Date' });
     let to_date = page.add_field({ label: 'To Date', fieldtype: 'Date' });
-    let ranking_filter = page.add_field({ label: 'Ranking', fieldtype: 'Select', options: ['Top 10', 'Lowest 10'], default: 'Top 10' });
+    
+    let ranking_filter = page.add_field({ label: 'Ranking', fieldtype: 'Select', options: ['Top 10', 'Lowest 10', 'All'], default: 'Top 10' });
 
     function set_dates() {
         let today = frappe.datetime.get_today();
@@ -112,7 +123,7 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
         </div>
     `).appendTo(page.body);
 
-    let customer_chart, item_chart, territory_chart;
+    let customer_chart = null, item_chart = null, territory_chart = null;
 
     // ======================
     // MASTER LOAD FUNCTION
@@ -161,23 +172,23 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
     });
 
     // ======================
-    // DOM RENDERING METHODS (BATCHED)
+    // DOM RENDERING METHODS (BATCHED & RECYCLED)
     // ======================
     function render_customers(data) {
         let container = $("#top-customers-container");
         if (!data || data.length === 0) {
             container.html("<p class='text-muted'>No Customer Data Found.</p>");
-            if (customer_chart) customer_chart.destroy();
+            if (customer_chart) { customer_chart.destroy(); customer_chart = null; }
             return;
         }
 
-        let html = ""; // Batch DOM Rendering
+        let html = ""; 
         let labels = [];
         let values = [];
         let ranking = ranking_filter.get_value();
 
         data.forEach((cust, index) => {
-            let highlight = index < 3 && ranking === 'Top 10' ? 'border:2px solid #16a34a;' : '';
+            let highlight = index < 3 && (ranking === 'Top 10' || ranking === 'All') ? 'border:2px solid #16a34a;' : '';
             let name = cust.customer_name || cust.customer;
             
             labels.push(name.length > 15 ? name.substring(0, 15) + "..." : name);
@@ -197,22 +208,28 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
 
         container.html(html);
 
-        if (customer_chart) customer_chart.destroy();
-        customer_chart = new frappe.Chart("#customer-chart", {
-            title: "Sales by Customer",
-            data: { labels: labels, datasets: [{ name: "Sales", values: values }] },
-            type: 'bar', height: 320,
-            axisOptions: { xAxisMode: 'tick', xIsSeries: false, shortenYAxisNumbers: 1 }, 
-            barOptions: { spaceRatio: 0.3 },
-            tooltipOptions: { formatTooltipY: d => format_currency(d) }
-        });
+        let chart_data = { labels: labels, datasets: [{ name: "Sales", values: values }] };
+
+        // OPTIMIZATION: Recycle existing chart if it exists
+        if (customer_chart) {
+            customer_chart.update(chart_data);
+        } else {
+            customer_chart = new frappe.Chart("#customer-chart", {
+                title: "Sales by Customer",
+                data: chart_data,
+                type: 'bar', height: 320,
+                axisOptions: { xAxisMode: 'tick', xIsSeries: false, shortenYAxisNumbers: 1 }, 
+                barOptions: { spaceRatio: 0.3 },
+                tooltipOptions: { formatTooltipY: d => format_currency(d) }
+            });
+        }
     }
 
     function render_items(data) {
         let container = $("#top-items-container");
         if (!data || data.length === 0) {
             container.html("<p class='text-muted'>No Item Data Found.</p>");
-            if (item_chart) item_chart.destroy();
+            if (item_chart) { item_chart.destroy(); item_chart = null; }
             return;
         }
 
@@ -222,8 +239,9 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
         let ranking = ranking_filter.get_value();
 
         data.forEach((itm, index) => {
-            let highlight = index < 3 && ranking === 'Top 10' ? 'border:2px solid #16a34a;' : '';
+            let highlight = index < 3 && (ranking === 'Top 10' || ranking === 'All') ? 'border:2px solid #16a34a;' : '';
             let name = itm.item_name || itm.item_code;
+            let qty = Number(itm.total_qty) || 0;
             
             labels.push(name.length > 15 ? name.substring(0, 15) + "..." : name);
             values.push(Number(itm.total) || 0);
@@ -236,28 +254,37 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
                     <div style="color:#2563eb;font-weight:bold; margin-top: 8px; font-size: 16px;">
                         ${format_currency(itm.total)}
                     </div>
+                    <div style="color:#6b7280; font-size: 13px; font-weight: 500; margin-top: 4px;">
+                        <span style="color:#0ea5e9; font-weight: 600;">${qty}</span> Units Sold
+                    </div>
                 </div>
             `;
         });
 
         container.html(html);
 
-        if (item_chart) item_chart.destroy();
-        item_chart = new frappe.Chart("#item-chart", {
-            title: "Sales by Item",
-            data: { labels: labels, datasets: [{ name: "Sales", values: values }] },
-            type: 'bar', height: 320,
-            axisOptions: { xAxisMode: 'tick', xIsSeries: false, shortenYAxisNumbers: 1 }, 
-            barOptions: { spaceRatio: 0.3 },
-            tooltipOptions: { formatTooltipY: d => format_currency(d) }
-        });
+        let chart_data = { labels: labels, datasets: [{ name: "Sales", values: values }] };
+
+        // OPTIMIZATION: Recycle existing chart if it exists
+        if (item_chart) {
+            item_chart.update(chart_data);
+        } else {
+            item_chart = new frappe.Chart("#item-chart", {
+                title: "Sales by Item",
+                data: chart_data,
+                type: 'bar', height: 320,
+                axisOptions: { xAxisMode: 'tick', xIsSeries: false, shortenYAxisNumbers: 1 }, 
+                barOptions: { spaceRatio: 0.3 },
+                tooltipOptions: { formatTooltipY: d => format_currency(d) }
+            });
+        }
     }
 
     function render_territories(data) {
         let container = $("#territory-cards-container");
         if (!data || data.length === 0) {
             container.html("<p class='text-muted'>No Territory Data Found.</p>");
-            if (territory_chart) territory_chart.destroy();
+            if (territory_chart) { territory_chart.destroy(); territory_chart = null; }
             return;
         }
 
@@ -289,14 +316,25 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
 
         container.html(html);
 
-        if (territory_chart) territory_chart.destroy();
-        territory_chart = new frappe.Chart("#territory-chart", {
-            title: "Sales by Territory",
-            data: { labels: labels, datasets: [{ name: "Sales", values: values }] },
-            type: 'bar', height: 320,
-            axisOptions: { xAxisMode: 'tick', xIsSeries: false, shortenYAxisNumbers: 1 }, 
-            barOptions: { spaceRatio: 0.3 },
-            tooltipOptions: { formatTooltipY: d => format_currency(d) }
-        });
+        let chart_data = { labels: labels, datasets: [{ name: "Sales", values: values }] };
+
+        // OPTIMIZATION: Recycle existing chart if it exists
+        if (territory_chart) {
+            territory_chart.update(chart_data);
+        } else {
+            territory_chart = new frappe.Chart("#territory-chart", {
+                title: "Sales by Territory",
+                data: chart_data,
+                type: 'bar', height: 320,
+                axisOptions: { xAxisMode: 'tick', xIsSeries: false, shortenYAxisNumbers: 1 }, 
+                barOptions: { spaceRatio: 0.3 },
+                tooltipOptions: { formatTooltipY: d => format_currency(d) }
+            });
+        }
     }
+
+    // OPTIMIZATION: Auto-load data once filters are rendered
+    setTimeout(() => {
+        if (page.btn_primary) page.btn_primary.trigger('click');
+    }, 100);
 };
