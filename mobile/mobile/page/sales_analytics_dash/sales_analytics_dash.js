@@ -46,6 +46,15 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
     // ======================
     // DYNAMIC FILTERS
     // ======================
+    
+    // Added Company Filter
+    let company_filter = page.add_field({
+        label: 'Company',
+        fieldtype: 'Link',
+        options: 'Company',
+        default: frappe.defaults.get_user_default("Company")
+    });
+
     let filter_type = page.add_field({
         label: 'Filter By',
         fieldtype: 'Select',
@@ -146,6 +155,7 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
 
         // 2. Build Single API Payload
         let args = {
+            company: company_filter.get_value(), // Added company parameter
             from_date: from_date.get_value(),
             to_date: to_date.get_value(),
             ranking: ranking_filter.get_value(),

@@ -1,11 +1,16 @@
 import frappe
 from datetime import datetime, timedelta
 
-def _get_filter_query(customer_group, item_group):
+def _get_filter_query(company, customer_group, item_group):
     conditions = ["si.docstatus = 1"]
     values = {}
     join_clause = ""
     amount_field = "si.base_grand_total"
+
+    # NEW: Filter by company
+    if company:
+        conditions.append("si.company = %(company)s")
+        values["company"] = company
 
     if customer_group:
         conditions.append("si.customer_group = %(customer_group)s")
@@ -20,8 +25,8 @@ def _get_filter_query(customer_group, item_group):
     return " AND ".join(conditions), values, join_clause, amount_field
 
 
-def get_top_customers(from_date=None, to_date=None, customer_group=None, item_group=None, ranking="Top 10"):
-    base_where, values, join_clause, amount_field = _get_filter_query(customer_group, item_group)
+def get_top_customers(from_date=None, to_date=None, company=None, customer_group=None, item_group=None, ranking="Top 10"):
+    base_where, values, join_clause, amount_field = _get_filter_query(company, customer_group, item_group)
     
     values["from_date"] = from_date
     values["to_date"] = to_date
@@ -44,8 +49,8 @@ def get_top_customers(from_date=None, to_date=None, customer_group=None, item_gr
     """, values, as_dict=True)
 
 
-def get_top_items(from_date=None, to_date=None, customer_group=None, item_group=None, ranking="Top 10"):
-    base_where, values, join_clause, _ = _get_filter_query(customer_group, item_group)
+def get_top_items(from_date=None, to_date=None, company=None, customer_group=None, item_group=None, ranking="Top 10"):
+    base_where, values, join_clause, _ = _get_filter_query(company, customer_group, item_group)
     
     if not join_clause:
         join_clause = "JOIN `tabSales Invoice Item` sii ON sii.parent = si.name"
@@ -76,7 +81,7 @@ def get_top_items(from_date=None, to_date=None, customer_group=None, item_group=
     """, values, as_dict=True)
 
 
-def get_territory_sales(from_date=None, to_date=None, customer_group=None, item_group=None, ranking="Top 10"):
+def get_territory_sales(from_date=None, to_date=None, company=None, customer_group=None, item_group=None, ranking="Top 10"):
     from_dt = datetime.strptime(from_date, "%Y-%m-%d")
     to_dt = datetime.strptime(to_date, "%Y-%m-%d")
     diff = (to_dt - from_dt).days
@@ -84,7 +89,7 @@ def get_territory_sales(from_date=None, to_date=None, customer_group=None, item_
     prev_from = (from_dt - timedelta(days=diff)).strftime("%Y-%m-%d")
     prev_to = (to_dt - timedelta(days=diff)).strftime("%Y-%m-%d")
 
-    base_where, values_base, join_clause, amount_field = _get_filter_query(customer_group, item_group)
+    base_where, values_base, join_clause, amount_field = _get_filter_query(company, customer_group, item_group)
 
     values_current = values_base.copy()
     values_current["from_date"] = from_date
@@ -129,17 +134,24 @@ def get_territory_sales(from_date=None, to_date=None, customer_group=None, item_
     return result[:10]
 
 
+# =========================
+# MASTER OPTIMIZED ENDPOINT
+# =========================
 @frappe.whitelist()
-def get_dashboard_data(from_date, to_date, ranking, customer_group=None, item_group=None, fetch_customers=0, fetch_items=0, fetch_territories=0):
+def get_dashboard_data(from_date, to_date, ranking, company=None, customer_group=None, item_group=None, fetch_customers=0, fetch_items=0, fetch_territories=0):
+    """
+    Executes all required queries in a single API roundtrip. 
+    Only queries the database for the datasets explicitly requested by the frontend.
+    """
     data = {}
 
     if int(fetch_customers):
-        data["customers"] = get_top_customers(from_date, to_date, customer_group, item_group, ranking)
+        data["customers"] = get_top_customers(from_date, to_date, company, customer_group, item_group, ranking)
     
     if int(fetch_items):
-        data["items"] = get_top_items(from_date, to_date, customer_group, item_group, ranking)
+        data["items"] = get_top_items(from_date, to_date, company, customer_group, item_group, ranking)
     
     if int(fetch_territories):
-        data["territories"] = get_territory_sales(from_date, to_date, customer_group, item_group, ranking)
+        data["territories"] = get_territory_sales(from_date, to_date, company, customer_group, item_group, ranking)
 
     return data
