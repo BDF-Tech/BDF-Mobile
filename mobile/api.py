@@ -236,18 +236,19 @@ def get_my_dashboard_stats():
 @frappe.whitelist()
 def place_order(items, req_date=None, req_shift=None, po_no=None):
     try:
+        # 1️⃣ RESOLVE CUSTOMER
+        # Using the helper logic to find the Customer ID linked to the user email
         customer_id = get_logged_in_customer()
-
-        # 🔥 Parse items safely
+        
+        # Parse items safely
         cart_items = json.loads(items) if isinstance(items, str) else items
-
         if not cart_items:
             frappe.throw("Cannot place empty order")
 
         target_date = req_date or add_days(today(), 1)
         target_shift = req_shift or "Morning"
 
-        # 1️⃣ VALIDATION CHECK (optimized query)
+        # 2️⃣ VALIDATION CHECK: Prevent duplicate orders for same date/shift
         existing_so = frappe.db.get_value(
             "Sales Order",
             {
@@ -256,67 +257,88 @@ def place_order(items, req_date=None, req_shift=None, po_no=None):
                 "delivery_shift": target_shift,
                 "docstatus": ["<", 2]
             },
-            ["name", "docstatus"],
-            as_dict=True
+            "name"
         )
 
         if existing_so:
             return {
                 "status": "error",
-                "message": f"A {'Draft' if existing_so.docstatus == 0 else 'Confirmed'} Order ({existing_so.name}) already exists for {formatdate(target_date)} ({target_shift})."
+                "message": f"An Order ({existing_so}) already exists for {formatdate(target_date)} ({target_shift})."
             }
 
-        # 2️⃣ CREATE ORDER
+        # 3️⃣ INITIALIZE SALES ORDER
         so = frappe.new_doc("Sales Order")
         so.customer = customer_id
-
-        # 🔥 Apply ERPNext defaults FIRST (keep as is)
+        
+        # Pulls in default currency, price list, etc.
         so.run_method("set_missing_values")
 
-        # 🔥 Set remaining fields (keep your logic)
+        customer_doc = frappe.get_doc("Customer", customer_id)
+        price_list = so.selling_price_list or customer_doc.default_price_list or "Standard Selling"
+
         so.update({
             "transaction_date": today(),
             "delivery_date": target_date,
             "delivery_shift": target_shift,
             "order_type": "Sales",
-            "company": frappe.defaults.get_user_default("Company"),
-            "po_no": po_no or None
+            "company": frappe.defaults.get_user_default("Company") or "Bastar Dairy Farm",
+            "po_no": po_no or None,
+            "territory": customer_doc.territory
         })
 
-        # 🔥 Add items (same logic)
-        so.extend("items", [
-            {
-                "item_code": row.get("item_code"),
-                "qty": row.get("qty"),
-                "delivery_date": target_date,
-                "uom": row.get("uom"),
-                "rate": row.get("rate", 0)
-            }
-            for row in cart_items
-            if row.get("item_code") and row.get("qty")
-        ])
+        # 4️⃣ MERGING LOGIC (Summing Cart + Mandatory)
+        # Using a dictionary to group by (item_code, uom)
+        merged_items = {}
 
-        # 🔥 FINAL TERRITORY SET (CRITICAL FIX — DO NOT MOVE ABOVE)
-        territory = frappe.db.get_value("Customer", customer_id, "territory")
+        # A. Add Cart Items
+        for row in cart_items:
+            key = (row.get("item_code"), row.get("uom"))
+            qty = flt(row.get("qty"))
+            if qty > 0:
+                merged_items[key] = merged_items.get(key, 0) + qty
 
-        if not territory:
-            frappe.throw("Customer has no Territory assigned")
+        # B. Add Mandatory Items (Cumulative)
+        if customer_doc.get("custom_minimumn_order"):
+            for m in customer_doc.get("custom_minimumn_order"):
+                key = (m.item, m.uom)
+                m_qty = flt(m.qty)
+                # This performs a mathematical addition (1 from cart + 1 mandatory = 2)
+                merged_items[key] = merged_items.get(key, 0) + m_qty
 
-        so.territory = territory
+        # 5️⃣ ADD MERGED ROWS TO SALES ORDER
+        for (item_code, uom), total_qty in merged_items.items():
+            # Calculate Price with UOM Conversion (Crate vs Nos)
+            base_rate = frappe.db.get_value("Item Price", 
+                {"item_code": item_code, "price_list": price_list}, "price_list_rate") or 0.0
 
-        # 🔥 SAVE (no change)
-        so.save(ignore_permissions=True)
+            conversion_factor = frappe.db.get_value("UOM Conversion Detail", 
+                {"parent": item_code, "uom": uom}, "conversion_factor") or 1.0
+            
+            actual_rate = flt(base_rate) * flt(conversion_factor)
+
+            so.append("items", {
+                "item_code": item_code,
+                "qty": total_qty,
+                "uom": uom,
+                "rate": actual_rate,
+                "delivery_date": target_date
+            })
+
+        # 6️⃣ FINAL CALCULATIONS & SAVE
+        so.set_missing_values()
+        so.calculate_taxes_and_totals()
+        
+        # insert() ensures the document and child tables are written to DB
+        so.insert(ignore_permissions=True)
 
         return {
             "status": "success",
-            "order_name": so.name,
-            "territory": so.territory
+            "order_name": so.name
         }
 
     except Exception as e:
-        frappe.log_error(frappe.get_traceback(), "Order Error")
-        return {"status": "error", "message": str(e)}
-# =========================================================
+        frappe.log_error(frappe.get_traceback(), "Order Placement Error")
+        return {"status": "error", "message": str(e)}  # =========================================================
 @frappe.whitelist()
 def get_order_list(filter_type="Last 7 Days", start_date=None, end_date=None):
     """
