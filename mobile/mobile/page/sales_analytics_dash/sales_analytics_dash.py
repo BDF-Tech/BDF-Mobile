@@ -1,4 +1,5 @@
 import frappe
+import json
 from datetime import datetime, timedelta
 
 def _get_filter_query(company, customer_group, item_group):
@@ -7,7 +8,6 @@ def _get_filter_query(company, customer_group, item_group):
     join_clause = ""
     amount_field = "si.base_grand_total"
 
-    # NEW: Filter by company
     if company:
         conditions.append("si.company = %(company)s")
         values["company"] = company
@@ -134,15 +134,83 @@ def get_territory_sales(from_date=None, to_date=None, company=None, customer_gro
     return result[:10]
 
 
+# NEW: Warehouse Sales Logic
+def get_warehouse_sales(from_date=None, to_date=None, company=None, customer_group=None, item_group=None, ranking="Top 10"):
+    base_where, values, join_clause, _ = _get_filter_query(company, customer_group, item_group)
+    
+    if not join_clause:
+        join_clause = "JOIN `tabSales Invoice Item` sii ON sii.parent = si.name"
+    
+    amount_field = "sii.base_amount"
+    values["from_date"] = from_date
+    values["to_date"] = to_date
+    where_clause = f"{base_where} AND si.posting_date BETWEEN %(from_date)s AND %(to_date)s AND sii.warehouse IS NOT NULL AND sii.warehouse != ''"
+    
+    order_by = "ASC" if ranking == "Lowest 10" else "DESC"
+    limit_clause = "" if ranking == "All" else "LIMIT 10"
+
+    return frappe.db.sql(f"""
+        SELECT 
+            sii.warehouse,
+            SUM(sii.stock_qty) as total_qty,
+            SUM({amount_field}) as total
+        FROM `tabSales Invoice` si
+        {join_clause}
+        WHERE {where_clause}
+        GROUP BY sii.warehouse
+        ORDER BY total {order_by}
+        {limit_clause}
+    """, values, as_dict=True)
+
+
+def get_customer_comparison(from_date=None, to_date=None, company=None, customers=None, bifurcation="Daily"):
+    if not customers:
+        return []
+        
+    conditions = ["si.docstatus = 1", "si.posting_date BETWEEN %(from_date)s AND %(to_date)s"]
+    values = {"from_date": from_date, "to_date": to_date}
+    
+    if company:
+        conditions.append("si.company = %(company)s")
+        values["company"] = company
+        
+    for i, cust in enumerate(customers):
+        values[f"cust_{i}"] = cust
+        
+    in_clause = ', '.join([f"%(cust_{i})s" for i in range(len(customers))])
+    conditions.append(f"si.customer IN ({in_clause})")
+    
+    where_clause = " AND ".join(conditions)
+    
+    if bifurcation == "Monthly":
+        period_expr = "DATE_FORMAT(si.posting_date, '%%Y-%%b')"
+    elif bifurcation == "Weekly":
+        period_expr = "CONCAT(YEAR(si.posting_date), '-W', LPAD(WEEK(si.posting_date, 1), 2, '0'))"
+    else:
+        period_expr = "DATE_FORMAT(si.posting_date, '%%Y-%%m-%%d')"
+    
+    return frappe.db.sql(f"""
+        SELECT 
+            {period_expr} as period,
+            si.customer,
+            si.customer_name,
+            SUM(sii.base_amount) as total_value,
+            SUM(sii.stock_qty) as total_qty
+        FROM `tabSales Invoice` si
+        JOIN `tabSales Invoice Item` sii ON sii.parent = si.name
+        WHERE {where_clause}
+        GROUP BY period, si.customer, si.customer_name
+        ORDER BY MIN(si.posting_date) ASC
+    """, values, as_dict=True)
+
+
 # =========================
 # MASTER OPTIMIZED ENDPOINT
 # =========================
 @frappe.whitelist()
-def get_dashboard_data(from_date, to_date, ranking, company=None, customer_group=None, item_group=None, fetch_customers=0, fetch_items=0, fetch_territories=0):
-    """
-    Executes all required queries in a single API roundtrip. 
-    Only queries the database for the datasets explicitly requested by the frontend.
-    """
+def get_dashboard_data(from_date, to_date, ranking, company=None, customer_group=None, item_group=None, 
+                       fetch_customers=0, fetch_items=0, fetch_territories=0, fetch_warehouses=0, fetch_comparison=0, compare_customers=None, bifurcation="Daily"):
+    
     data = {}
 
     if int(fetch_customers):
@@ -153,5 +221,12 @@ def get_dashboard_data(from_date, to_date, ranking, company=None, customer_group
     
     if int(fetch_territories):
         data["territories"] = get_territory_sales(from_date, to_date, company, customer_group, item_group, ranking)
+
+    if int(fetch_warehouses):
+        data["warehouses"] = get_warehouse_sales(from_date, to_date, company, customer_group, item_group, ranking)
+
+    if int(fetch_comparison) and compare_customers:
+        customers_list = json.loads(compare_customers)
+        data["comparison"] = get_customer_comparison(from_date, to_date, company, customers_list, bifurcation)
 
     return data

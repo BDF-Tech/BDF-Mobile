@@ -21,7 +21,6 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
         </div>
     `).appendTo('body');
 
-    // OPTIMIZATION: Prevent duplicate CSS injection on hot reloads
     if ($('#sales-dash-styles').length === 0) {
         $(`<style id="sales-dash-styles">
         .modern-spinner { display: inline-block; position: relative; width: 64px; height: 64px; }
@@ -33,7 +32,6 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
         </style>`).appendTo('head');
     }
 
-    // OPTIMIZATION: Throttle button to prevent database spamming
     function show_loader() { 
         $("#dashboard-loader").css('display','flex'); 
         if (page.btn_primary) page.btn_primary.prop('disabled', true);
@@ -46,8 +44,8 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
     // ======================
     // DYNAMIC FILTERS
     // ======================
-    
-    // Added Company Filter
+    let ranking_filter; 
+
     let company_filter = page.add_field({
         label: 'Company',
         fieldtype: 'Link',
@@ -58,10 +56,23 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
     let filter_type = page.add_field({
         label: 'Filter By',
         fieldtype: 'Select',
-        options: ['', 'Customer', 'Territory', 'Item'],
+        options: ['', 'Customer', 'Territory', 'Item', 'Warehouse', 'Customer Comparison'],
         change() {
             let type = filter_type.get_value();
+            
             filter_group.set_value('');
+            compare_cust_1.set_value('');
+            compare_cust_2.set_value('');
+
+            // Hide EVERYTHING dependent by default
+            $(filter_group.wrapper).hide();
+            $(compare_cust_1.wrapper).hide();
+            $(compare_cust_2.wrapper).hide();
+            $(bifurcation.wrapper).hide();
+            
+            if (ranking_filter && ranking_filter.wrapper) {
+                $(ranking_filter.wrapper).show();
+            }
 
             if (type === 'Customer') {
                 filter_group.df.options = 'Customer Group';
@@ -71,7 +82,15 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
                 filter_group.df.options = 'Item Group';
                 filter_group.df.label = 'Item Group';
                 $(filter_group.wrapper).show();
-            } else {
+            } else if (type === 'Customer Comparison') { 
+                $(compare_cust_1.wrapper).show();
+                $(compare_cust_2.wrapper).show();
+                $(bifurcation.wrapper).show();
+                
+                // Explicitly ensure Ranking and Group are hidden for Comparison
+                if (ranking_filter && ranking_filter.wrapper) {
+                    $(ranking_filter.wrapper).hide();
+                }
                 $(filter_group.wrapper).hide();
             }
             filter_group.refresh();
@@ -80,6 +99,14 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
 
     let filter_group = page.add_field({ label: 'Group', fieldtype: 'Link', options: 'Customer Group' });
     $(filter_group.wrapper).hide();
+
+    let compare_cust_1 = page.add_field({ label: 'Customer A', fieldtype: 'Link', options: 'Customer' });
+    let compare_cust_2 = page.add_field({ label: 'Customer B', fieldtype: 'Link', options: 'Customer' });
+    let bifurcation = page.add_field({ label: 'Bifurcation', fieldtype: 'Select', options: ['Daily', 'Weekly', 'Monthly'], default: 'Daily' });
+    
+    $(compare_cust_1.wrapper).hide();
+    $(compare_cust_2.wrapper).hide();
+    $(bifurcation.wrapper).hide();
 
     let period = page.add_field({
         label: 'Period',
@@ -92,7 +119,7 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
     let from_date = page.add_field({ label: 'From Date', fieldtype: 'Date' });
     let to_date = page.add_field({ label: 'To Date', fieldtype: 'Date' });
     
-    let ranking_filter = page.add_field({ label: 'Ranking', fieldtype: 'Select', options: ['Top 10', 'Lowest 10', 'All'], default: 'Top 10' });
+    ranking_filter = page.add_field({ label: 'Ranking', fieldtype: 'Select', options: ['Top 10', 'Lowest 10', 'All'], default: 'Top 10' });
 
     function set_dates() {
         let today = frappe.datetime.get_today();
@@ -132,7 +159,26 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
         </div>
     `).appendTo(page.body);
 
-    let customer_chart = null, item_chart = null, territory_chart = null;
+    let warehouse_section = $(`
+        <div id="warehouse-section" style="margin-top:30px; border-top: 1px solid #e5e7eb; padding-top: 20px; display:none;">
+            <h3>Warehouse Sales</h3>
+            <div id="top-warehouses-container" style="display:flex;flex-wrap:wrap;gap:15px;margin-bottom:20px;"></div>
+            <div id="warehouse-chart"></div>
+        </div>
+    `).appendTo(page.body);
+
+    let comparison_section = $(`
+        <div id="comparison-section" style="margin-top:20px; display:none;">
+            <h3>Time Series Comparison</h3>
+            <div id="comparison-cards-container" style="display:flex;flex-wrap:wrap;gap:15px;margin-bottom:20px;"></div>
+            <div style="display:flex; flex-direction:column; gap: 30px;">
+                <div id="comparison-value-chart" style="width:100%;"></div>
+                <div id="comparison-qty-chart" style="width:100%;"></div>
+            </div>
+        </div>
+    `).appendTo(page.body);
+
+    let customer_chart = null, item_chart = null, territory_chart = null, warehouse_chart = null, comp_value_chart = null, comp_qty_chart = null;
 
     // ======================
     // MASTER LOAD FUNCTION
@@ -143,19 +189,27 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
         let fetch_customers = (type === 'Customer' || !type) ? 1 : 0;
         let fetch_items = (type === 'Item' || !type) ? 1 : 0;
         let fetch_territories = (type === 'Territory' || !type) ? 1 : 0;
+        let fetch_warehouses = (type === 'Warehouse' || !type) ? 1 : 0;
+        let fetch_comparison = (type === 'Customer Comparison') ? 1 : 0;
+        
+        if (fetch_comparison) {
+            fetch_customers = 0; fetch_items = 0; fetch_territories = 0; fetch_warehouses = 0;
+        }
 
-        if (fetch_customers + fetch_items + fetch_territories === 0) return;
+        if (fetch_customers + fetch_items + fetch_territories + fetch_warehouses + fetch_comparison === 0) return;
         
         show_loader();
 
-        // 1. Toggle UI Sections Instantly
         fetch_customers ? customer_section.show() : customer_section.hide();
         fetch_items ? item_section.show() : item_section.hide();
         fetch_territories ? territory_section.show() : territory_section.hide();
+        fetch_warehouses ? warehouse_section.show() : warehouse_section.hide();
+        fetch_comparison ? comparison_section.show() : comparison_section.hide();
 
-        // 2. Build Single API Payload
+        let compare_array = [compare_cust_1.get_value(), compare_cust_2.get_value()].filter(Boolean);
+
         let args = {
-            company: company_filter.get_value(), // Added company parameter
+            company: company_filter.get_value(),
             from_date: from_date.get_value(),
             to_date: to_date.get_value(),
             ranking: ranking_filter.get_value(),
@@ -163,10 +217,13 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
             item_group: type === 'Item' ? filter_group.get_value() : null,
             fetch_customers: fetch_customers,
             fetch_items: fetch_items,
-            fetch_territories: fetch_territories
+            fetch_territories: fetch_territories,
+            fetch_warehouses: fetch_warehouses,
+            fetch_comparison: fetch_comparison,
+            compare_customers: JSON.stringify(compare_array),
+            bifurcation: bifurcation.get_value()
         };
 
-        // 3. One Call to Rule Them All
         frappe.call({
             method: 'mobile.mobile.page.sales_analytics_dash.sales_analytics_dash.get_dashboard_data',
             args: args,
@@ -175,6 +232,8 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
                     if (fetch_customers) render_customers(r.message.customers);
                     if (fetch_items) render_items(r.message.items);
                     if (fetch_territories) render_territories(r.message.territories);
+                    if (fetch_warehouses) render_warehouses(r.message.warehouses);
+                    if (fetch_comparison) render_comparison(r.message.comparison);
                 }
                 hide_loader();
             }
@@ -182,7 +241,7 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
     });
 
     // ======================
-    // DOM RENDERING METHODS (BATCHED & RECYCLED)
+    // DOM RENDERING METHODS 
     // ======================
     function render_customers(data) {
         let container = $("#top-customers-container");
@@ -219,18 +278,12 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
         container.html(html);
 
         let chart_data = { labels: labels, datasets: [{ name: "Sales", values: values }] };
-
-        // OPTIMIZATION: Recycle existing chart if it exists
-        if (customer_chart) {
-            customer_chart.update(chart_data);
-        } else {
+        if (customer_chart) { customer_chart.update(chart_data); } 
+        else {
             customer_chart = new frappe.Chart("#customer-chart", {
-                title: "Sales by Customer",
-                data: chart_data,
-                type: 'bar', height: 320,
+                title: "Sales by Customer", data: chart_data, type: 'bar', height: 320,
                 axisOptions: { xAxisMode: 'tick', xIsSeries: false, shortenYAxisNumbers: 1 }, 
-                barOptions: { spaceRatio: 0.3 },
-                tooltipOptions: { formatTooltipY: d => format_currency(d) }
+                barOptions: { spaceRatio: 0.3 }, tooltipOptions: { formatTooltipY: d => format_currency(d) }
             });
         }
     }
@@ -243,9 +296,7 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
             return;
         }
 
-        let html = "";
-        let labels = [];
-        let values = [];
+        let html = ""; let labels = []; let values = [];
         let ranking = ranking_filter.get_value();
 
         data.forEach((itm, index) => {
@@ -274,18 +325,12 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
         container.html(html);
 
         let chart_data = { labels: labels, datasets: [{ name: "Sales", values: values }] };
-
-        // OPTIMIZATION: Recycle existing chart if it exists
-        if (item_chart) {
-            item_chart.update(chart_data);
-        } else {
+        if (item_chart) { item_chart.update(chart_data); } 
+        else {
             item_chart = new frappe.Chart("#item-chart", {
-                title: "Sales by Item",
-                data: chart_data,
-                type: 'bar', height: 320,
+                title: "Sales by Item", data: chart_data, type: 'bar', height: 320,
                 axisOptions: { xAxisMode: 'tick', xIsSeries: false, shortenYAxisNumbers: 1 }, 
-                barOptions: { spaceRatio: 0.3 },
-                tooltipOptions: { formatTooltipY: d => format_currency(d) }
+                barOptions: { spaceRatio: 0.3 }, tooltipOptions: { formatTooltipY: d => format_currency(d) }
             });
         }
     }
@@ -298,9 +343,7 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
             return;
         }
 
-        let html = "";
-        let labels = [];
-        let values = [];
+        let html = ""; let labels = []; let values = [];
 
         data.forEach((row, index) => {
             let growth_color = row.growth >= 0 ? "#16a34a" : "#dc2626";
@@ -327,24 +370,141 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
         container.html(html);
 
         let chart_data = { labels: labels, datasets: [{ name: "Sales", values: values }] };
-
-        // OPTIMIZATION: Recycle existing chart if it exists
-        if (territory_chart) {
-            territory_chart.update(chart_data);
-        } else {
+        if (territory_chart) { territory_chart.update(chart_data); } 
+        else {
             territory_chart = new frappe.Chart("#territory-chart", {
-                title: "Sales by Territory",
-                data: chart_data,
-                type: 'bar', height: 320,
+                title: "Sales by Territory", data: chart_data, type: 'bar', height: 320,
                 axisOptions: { xAxisMode: 'tick', xIsSeries: false, shortenYAxisNumbers: 1 }, 
-                barOptions: { spaceRatio: 0.3 },
-                tooltipOptions: { formatTooltipY: d => format_currency(d) }
+                barOptions: { spaceRatio: 0.3 }, tooltipOptions: { formatTooltipY: d => format_currency(d) }
             });
         }
     }
 
-    // OPTIMIZATION: Auto-load data once filters are rendered
-    setTimeout(() => {
-        if (page.btn_primary) page.btn_primary.trigger('click');
-    }, 100);
+    function render_warehouses(data) {
+        let container = $("#top-warehouses-container");
+        if (!data || data.length === 0) {
+            container.html("<p class='text-muted'>No Warehouse Data Found.</p>");
+            if (warehouse_chart) { warehouse_chart.destroy(); warehouse_chart = null; }
+            return;
+        }
+
+        let html = ""; let labels = []; let values = [];
+        let ranking = ranking_filter.get_value();
+
+        data.forEach((row, index) => {
+            let highlight = index < 3 && (ranking === 'Top 10' || ranking === 'All') ? 'border:2px solid #10b981;' : '';
+            let name = row.warehouse || "Unknown Warehouse";
+            let qty = Number(row.total_qty) || 0;
+
+            labels.push(name.length > 15 ? name.substring(0, 15) + "..." : name);
+            values.push(Number(row.total) || 0);
+
+            html += `
+                <div style="width:260px;padding:16px;border-radius:12px;background:#fff;border:1px solid #e5e7eb;${highlight}">
+                    <div style="color:#6b7280; font-size: 12px;">#${index+1}</div>
+                    <div style="font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${name}</div>
+                    <div style="color:#10b981;font-weight:bold; margin-top: 8px; font-size: 16px;">
+                        ${format_currency(row.total)}
+                    </div>
+                    <div style="color:#6b7280; font-size: 13px; font-weight: 500; margin-top: 4px;">
+                        <span style="color:#f59e0b; font-weight: 600;">${qty}</span> Units Sold
+                    </div>
+                </div>
+            `;
+        });
+
+        container.html(html);
+
+        let chart_data = { labels: labels, datasets: [{ name: "Sales", values: values }] };
+        if (warehouse_chart) { warehouse_chart.update(chart_data); } 
+        else {
+            warehouse_chart = new frappe.Chart("#warehouse-chart", {
+                title: "Sales by Warehouse", data: chart_data, type: 'bar', height: 320,
+                colors: ['#10b981'], // Emerald Green to distinguish from other charts
+                axisOptions: { xAxisMode: 'tick', xIsSeries: false, shortenYAxisNumbers: 1 }, 
+                barOptions: { spaceRatio: 0.3 }, tooltipOptions: { formatTooltipY: d => format_currency(d) }
+            });
+        }
+    }
+
+    function render_comparison(data) {
+        let container = $("#comparison-cards-container");
+        if (!data || data.length === 0) {
+            container.html("<p class='text-muted'>No data found for these customers in the selected range.</p>");
+            if (comp_value_chart) { comp_value_chart.destroy(); comp_value_chart = null; }
+            if (comp_qty_chart) { comp_qty_chart.destroy(); comp_qty_chart = null; }
+            return;
+        }
+
+        let unique_periods = [...new Set(data.map(d => d.period))];
+        let unique_customers = [...new Set(data.map(d => d.customer_name || d.customer))];
+
+        let html = "";
+        unique_customers.forEach(cust => {
+            let total_val = data.filter(d => (d.customer_name || d.customer) === cust).reduce((sum, row) => sum + Number(row.total_value), 0);
+            let total_qty = data.filter(d => (d.customer_name || d.customer) === cust).reduce((sum, row) => sum + Number(row.total_qty), 0);
+
+            html += `
+                <div style="flex:1; min-width: 200px; padding:20px;border-radius:12px;background:#f8fafc;border:1px solid #e2e8f0; text-align:center;">
+                    <div style="font-weight: 700; font-size: 16px; margin-bottom: 12px; color:#1e293b;">${cust}</div>
+                    <div style="margin-bottom: 8px;">
+                        <span style="font-size:12px; color:#64748b; text-transform:uppercase;">Overall Value</span><br>
+                        <span style="color:#16a34a; font-weight:bold; font-size: 20px;">${format_currency(total_val)}</span>
+                    </div>
+                    <div>
+                        <span style="font-size:12px; color:#64748b; text-transform:uppercase;">Overall Items Sold</span><br>
+                        <span style="color:#0ea5e9; font-weight:bold; font-size: 20px;">${total_qty}</span>
+                    </div>
+                </div>
+            `;
+        });
+        container.html(html);
+
+        let datasets_value = unique_customers.map(cust => {
+            return {
+                name: cust,
+                values: unique_periods.map(p => {
+                    let match = data.find(d => d.period === p && (d.customer_name || d.customer) === cust);
+                    return match ? Number(match.total_value) : 0;
+                })
+            };
+        });
+
+        let datasets_qty = unique_customers.map(cust => {
+            return {
+                name: cust,
+                values: unique_periods.map(p => {
+                    let match = data.find(d => d.period === p && (d.customer_name || d.customer) === cust);
+                    return match ? Number(match.total_qty) : 0;
+                })
+            };
+        });
+
+        let line_colors = ['#16a34a', '#0ea5e9']; 
+
+        let chart_data_val = { labels: unique_periods, datasets: datasets_value };
+        if (comp_value_chart) { comp_value_chart.update(chart_data_val); } 
+        else {
+            comp_value_chart = new frappe.Chart("#comparison-value-chart", {
+                title: `Value Comparison (${bifurcation.get_value()})`,
+                data: chart_data_val, type: 'line', height: 280, colors: line_colors,
+                axisOptions: { xAxisMode: 'tick', xIsSeries: true, shortenYAxisNumbers: 1 },
+                tooltipOptions: { formatTooltipY: d => format_currency(d) },
+                lineOptions: { regionFill: 1, hideDots: 0 }
+            });
+        }
+
+        let chart_data_qty = { labels: unique_periods, datasets: datasets_qty };
+        if (comp_qty_chart) { comp_qty_chart.update(chart_data_qty); } 
+        else {
+            comp_qty_chart = new frappe.Chart("#comparison-qty-chart", {
+                title: `Quantity Comparison (${bifurcation.get_value()})`,
+                data: chart_data_qty, type: 'line', height: 280, colors: line_colors,
+                axisOptions: { xAxisMode: 'tick', xIsSeries: true, shortenYAxisNumbers: 1 },
+                lineOptions: { regionFill: 1, hideDots: 0 }
+            });
+        }
+    }
+
+    setTimeout(() => { if (page.btn_primary) page.btn_primary.trigger('click'); }, 100);
 };
