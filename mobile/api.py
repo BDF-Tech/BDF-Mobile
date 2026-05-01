@@ -42,6 +42,8 @@ def get_logged_in_customer():
 # =========================================================
 # 📅 HELPER: DATE FILTERS (UPDATED)
 # =========================================================
+
+
 def get_date_range(filter_type, start_date=None, end_date=None):
     """
     Logic: 
@@ -64,16 +66,15 @@ def get_date_range(filter_type, start_date=None, end_date=None):
 # =========================================================
 # 📦 ITEM CATALOG API
 # =========================================================
+
+
 @frappe.whitelist()
 def get_item_list():
     try:
-        # --- STEP 1: Get Customer ---
         customer_id = get_logged_in_customer()
-
         if not customer_id:
             return {"error": f"No Customer linked to user {frappe.session.user}. Please contact support."}
 
-        # --- STEP 2: Get Price List ---
         customer_details = frappe.db.get_value(
             "Customer",
             customer_id,
@@ -82,44 +83,27 @@ def get_item_list():
         )
 
         price_list = customer_details.get("default_price_list")
-
         if not price_list and customer_details.get("customer_group"):
-            price_list = frappe.db.get_value(
-                "Customer Group",
-                customer_details["customer_group"],
-                "default_price_list"
-            )
-
+            price_list = frappe.db.get_value("Customer Group", customer_details["customer_group"], "default_price_list")
         if not price_list:
-            price_list = frappe.db.get_value(
-                "Selling Settings",
-                None,
-                "selling_price_list"
-            ) or "Standard Selling"
+            price_list = frappe.db.get_value("Selling Settings", None, "selling_price_list") or "Standard Selling"
 
-        # --- STEP 3: GET TEMPLATE ITEMS ---
         template = customer_details.get("custom_app_template")
-
         if not template:
             return []
 
         allowed_rows = frappe.get_all(
             "Item Template Item",
-            filters={
-                "parent": template,
-                "allow_on_app": 1
-            },
+            filters={"parent": template, "allow_on_app": 1},
             fields=["item as item_code", "uom"]
         )
 
         if not allowed_rows:
             return []
 
-        # 🔥 OPTIMIZED SETS
         allowed_item_codes = tuple(set(r.item_code for r in allowed_rows))
         allowed_uom_map = set(f"{r.item_code}_{r.uom}" for r in allowed_rows)
 
-        # --- STEP 4: Main Item Query ---
         items = frappe.db.sql("""
             SELECT
                 i.item_code, i.item_name, i.image, i.item_group,
@@ -141,45 +125,47 @@ def get_item_list():
         if not items:
             return []
 
-        # --- STEP 5: Bulk Fetch UOMs ---
         all_uoms = frappe.db.get_all(
             "UOM Conversion Detail",
             filters={"parent": ["in", allowed_item_codes]},
             fields=["parent", "uom", "conversion_factor"]
         )
 
-        from collections import defaultdict
         uom_lookup = defaultdict(list)
         for u in all_uoms:
             uom_lookup[u.parent].append(u)
 
-        result = []
+        # --- Create MOQ & Mandatory Rules Mapping for Flutter ---
+        moq_map = {}
+        customer_doc = frappe.get_doc("Customer", customer_id)
+        if customer_doc.get("custom_minimumn_order"):
+            for m in customer_doc.get("custom_minimumn_order"):
+                moq_map[m.item] = {
+                    "min_qty": flt(m.qty),
+                    "is_moq_only": m.get("minimum_qty", 0) # 1 = Checkbox Ticked (MOQ), 0 = Unticked (Mandatory)
+                }
 
-        # --- STEP 6: Processing ---
+        result = []
         for item in items:
             item_uom_rows = uom_lookup.get(item.item_code, [])
-
             uom_map = {row.uom: row.conversion_factor for row in item_uom_rows}
-
             if item.stock_uom not in uom_map:
                 uom_map[item.stock_uom] = 1.0
 
             final_uoms_list = []
-
             for uom, factor in uom_map.items():
                 key = f"{item.item_code}_{uom}"
-
                 if key in allowed_uom_map:
-                    final_uoms_list.append({
-                        "uom": uom,
-                        "conversion_factor": factor
-                    })
+                    final_uoms_list.append({"uom": uom, "conversion_factor": factor})
 
-            if not final_uoms_list:
+            if not final_uoms_list or not item.item_code:
                 continue
-
-            if not item.item_code:
-                continue
+            
+            # Identify if it is forced mandatory
+            item_moq_data = moq_map.get(item.item_code, {})
+            is_mandatory = 0
+            if item.item_code in moq_map and item_moq_data.get("is_moq_only") == 0:
+                is_mandatory = 1
 
             result.append({
                 "item_code": item.item_code,
@@ -189,35 +175,22 @@ def get_item_list():
                 "stock_uom": item.stock_uom,
                 "base_rate": flt(item.base_rate),
                 "uoms": final_uoms_list,
-                "price_list": price_list
+                "price_list": price_list,
+                "min_qty": item_moq_data.get("min_qty", 0.0),
+                "is_mandatory": is_mandatory
             })
 
-        # =========================================================
-        # 🔥 STEP 7: GROUP-WISE SORTING (NEW LOGIC)
-        # =========================================================
-
-        category_priority = {
-            "Milk FG": 1,
-            "Dahi FG": 2,
-            "Paneer FG": 3,
-            "Paneer FG": 4
-        }
-
-        result.sort(key=lambda x: (
-            category_priority.get(x.get("item_group"), 999),
-            x.get("item_name", "")
-        ))
-
-        # =========================================================
-
+        category_priority = {"Milk FG": 1, "Dahi FG": 2, "Paneer FG": 3}
+        result.sort(key=lambda x: (category_priority.get(x.get("item_group"), 999), x.get("item_name", "")))
         return result
 
     except Exception as e:
         frappe.log_error(frappe.get_traceback(), "get_item_list Error")
-        # =========================================================
         return {"error": str(e)}
 # 📊 DASHBOARD API
 # =========================================================
+
+
 @frappe.whitelist()
 def get_my_dashboard_stats():
     customer_id = get_logged_in_customer()
@@ -233,14 +206,14 @@ def get_my_dashboard_stats():
 # =========================================================
 # 🛒 ORDER PLACEMENT API
 # =========================================================
+
+
 @frappe.whitelist()
 def place_order(items, req_date=None, req_shift=None, po_no=None):
     try:
-        # 1️⃣ RESOLVE CUSTOMER
-        # Using the helper logic to find the Customer ID linked to the user email
         customer_id = get_logged_in_customer()
+        customer_doc = frappe.get_doc("Customer", customer_id)
         
-        # Parse items safely
         cart_items = json.loads(items) if isinstance(items, str) else items
         if not cart_items:
             frappe.throw("Cannot place empty order")
@@ -248,32 +221,17 @@ def place_order(items, req_date=None, req_shift=None, po_no=None):
         target_date = req_date or add_days(today(), 1)
         target_shift = req_shift or "Morning"
 
-        # 2️⃣ VALIDATION CHECK: Prevent duplicate orders for same date/shift
         existing_so = frappe.db.get_value(
             "Sales Order",
-            {
-                "customer": customer_id,
-                "delivery_date": target_date,
-                "delivery_shift": target_shift,
-                "docstatus": ["<", 2]
-            },
-            "name"
+            {"customer": customer_id, "delivery_date": target_date, "delivery_shift": target_shift, "docstatus": ["<", 2]},
+            ["name", "docstatus"], as_dict=True
         )
-
         if existing_so:
-            return {
-                "status": "error",
-                "message": f"An Order ({existing_so}) already exists for {formatdate(target_date)} ({target_shift})."
-            }
+            return {"status": "error", "message": f"A {'Draft' if existing_so.docstatus == 0 else 'Confirmed'} Order ({existing_so.name}) already exists for {formatdate(target_date)} ({target_shift})."}
 
-        # 3️⃣ INITIALIZE SALES ORDER
         so = frappe.new_doc("Sales Order")
         so.customer = customer_id
-        
-        # Pulls in default currency, price list, etc.
         so.run_method("set_missing_values")
-
-        customer_doc = frappe.get_doc("Customer", customer_id)
         price_list = so.selling_price_list or customer_doc.default_price_list or "Standard Selling"
 
         so.update({
@@ -286,34 +244,36 @@ def place_order(items, req_date=None, req_shift=None, po_no=None):
             "territory": customer_doc.territory
         })
 
-        # 4️⃣ MERGING LOGIC (Summing Cart + Mandatory)
-        # Using a dictionary to group by (item_code, uom)
+        # --- MERGING & VALIDATION LOGIC ---
         merged_items = {}
 
-        # A. Add Cart Items
+        # 1. Add Cart Items
         for row in cart_items:
             key = (row.get("item_code"), row.get("uom"))
             qty = flt(row.get("qty"))
             if qty > 0:
                 merged_items[key] = merged_items.get(key, 0) + qty
 
-        # B. Add Mandatory Items (Cumulative)
+        # 2. Process Rules (MOQ vs Mandatory)
         if customer_doc.get("custom_minimumn_order"):
             for m in customer_doc.get("custom_minimumn_order"):
                 key = (m.item, m.uom)
                 m_qty = flt(m.qty)
-                # This performs a mathematical addition (1 from cart + 1 mandatory = 2)
-                merged_items[key] = merged_items.get(key, 0) + m_qty
+                is_moq_only = m.get("minimum_qty", 0) 
 
-        # 5️⃣ ADD MERGED ROWS TO SALES ORDER
+                if is_moq_only == 1:
+                    # MOQ: Validate if in cart
+                    if key in merged_items and merged_items[key] > 0:
+                        if merged_items[key] < m_qty:
+                            return {"status": "error", "message": f"Minimum order for {m.item} is {int(m_qty)} {m.uom}."}
+                else:
+                    # Mandatory: Always sum it
+                    merged_items[key] = merged_items.get(key, 0) + m_qty
+
+        # 3. Add rows to Sales Order
         for (item_code, uom), total_qty in merged_items.items():
-            # Calculate Price with UOM Conversion (Crate vs Nos)
-            base_rate = frappe.db.get_value("Item Price", 
-                {"item_code": item_code, "price_list": price_list}, "price_list_rate") or 0.0
-
-            conversion_factor = frappe.db.get_value("UOM Conversion Detail", 
-                {"parent": item_code, "uom": uom}, "conversion_factor") or 1.0
-            
+            base_rate = frappe.db.get_value("Item Price", {"item_code": item_code, "price_list": price_list}, "price_list_rate") or 0.0
+            conversion_factor = frappe.db.get_value("UOM Conversion Detail", {"parent": item_code, "uom": uom}, "conversion_factor") or 1.0
             actual_rate = flt(base_rate) * flt(conversion_factor)
 
             so.append("items", {
@@ -324,21 +284,17 @@ def place_order(items, req_date=None, req_shift=None, po_no=None):
                 "delivery_date": target_date
             })
 
-        # 6️⃣ FINAL CALCULATIONS & SAVE
         so.set_missing_values()
         so.calculate_taxes_and_totals()
-        
-        # insert() ensures the document and child tables are written to DB
         so.insert(ignore_permissions=True)
 
-        return {
-            "status": "success",
-            "order_name": so.name
-        }
+        return {"status": "success", "order_name": so.name, "territory": so.territory}
 
     except Exception as e:
         frappe.log_error(frappe.get_traceback(), "Order Placement Error")
-        return {"status": "error", "message": str(e)}  # =========================================================
+        return {"status": "error", "message": str(e)}
+
+
 @frappe.whitelist()
 def get_order_list(filter_type="Last 7 Days", start_date=None, end_date=None):
     """
@@ -361,6 +317,8 @@ def get_order_list(filter_type="Last 7 Days", start_date=None, end_date=None):
                                 order_by="transaction_date desc"
                                 )
     return orders
+
+
 @frappe.whitelist()
 def get_order_details(order_id):
     if not frappe.db.exists("Sales Order", order_id):
@@ -391,6 +349,8 @@ def get_order_details(order_id):
 # =========================================================
 # 🧾 SALES INVOICE LIST (UPDATED)
 # =========================================================
+
+
 @frappe.whitelist()
 def get_invoice_list(filter_type="Last 7 Days", start_date=None, end_date=None):
     """
@@ -413,6 +373,7 @@ def get_invoice_list(filter_type="Last 7 Days", start_date=None, end_date=None):
                                   order_by="posting_date desc"
                                   )
     return invoices
+
 
 @frappe.whitelist()
 def get_invoice_details(invoice_id=None):
@@ -464,6 +425,8 @@ def get_invoice_details(invoice_id=None):
 # =========================================================
 # 📒 LEDGER REPORT
 # =========================================================
+
+
 @frappe.whitelist()
 def get_customer_ledger(filter_type="This Year", start_date=None, end_date=None, voucher_type=None, selected_company=None):
     # (Assuming get_logged_in_customer and get_date_range are defined elsewhere in your file)
@@ -554,6 +517,8 @@ def get_customer_ledger(filter_type="This Year", start_date=None, end_date=None,
 # =========================================================
 # 👤 PROFILE API
 # =========================================================
+
+
 @frappe.whitelist()
 def get_user_profile():
     try:
@@ -607,6 +572,7 @@ def get_user_profile():
     except Exception as e:
         frappe.log_error(f"Profile Error: {str(e)}")
         return {"error": str(e)}
+
 
 '''@frappe.whitelist()
 def fetch_customer_catalog(customer_id):
@@ -671,10 +637,12 @@ def fetch_customer_catalog(customer_id):
     return f"Successfully fetched catalog. Auto-enabled {enabled_count} default UOMs."
 '''
 
+
 @frappe.whitelist(allow_guest=True)
 def s(v=None):
     # Pass 'v' from the URL to your main function
     return capture_scale_data(w=v)
+
 
 @frappe.whitelist()
 def fetch_template_items(template_name):
