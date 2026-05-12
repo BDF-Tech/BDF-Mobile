@@ -2,7 +2,7 @@ import frappe
 import json
 from datetime import datetime, timedelta
 
-def _get_filter_query(company, customer_group, item_group):
+def _get_filter_query(company, customer_group, item_group, sort_by="Value"):
     conditions = ["si.docstatus = 1"]
     values = {}
     join_clause = ""
@@ -16,21 +16,25 @@ def _get_filter_query(company, customer_group, item_group):
         conditions.append("si.customer_group = %(customer_group)s")
         values["customer_group"] = customer_group
 
-    if item_group:
+    if item_group or sort_by == "Quantity":
         join_clause = "JOIN `tabSales Invoice Item` sii ON sii.parent = si.name"
         amount_field = "sii.base_amount"
-        conditions.append("sii.item_group = %(item_group)s")
-        values["item_group"] = item_group
+        if item_group:
+            conditions.append("sii.item_group = %(item_group)s")
+            values["item_group"] = item_group
 
     return " AND ".join(conditions), values, join_clause, amount_field
 
 
-def get_top_customers(from_date=None, to_date=None, company=None, customer_group=None, item_group=None, ranking="Top 10"):
-    base_where, values, join_clause, amount_field = _get_filter_query(company, customer_group, item_group)
+def get_top_customers(from_date=None, to_date=None, company=None, customer_group=None, item_group=None, ranking="Top 10", sort_by="Value"):
+    base_where, values, join_clause, amount_field = _get_filter_query(company, customer_group, item_group, sort_by)
     
     values["from_date"] = from_date
     values["to_date"] = to_date
     where_clause = f"{base_where} AND si.posting_date BETWEEN %(from_date)s AND %(to_date)s"
+    
+    qty_select = "SUM(sii.stock_qty) as total_qty," if "sii" in join_clause else "0 as total_qty,"
+    sort_field = "total_qty" if sort_by == "Quantity" else "total"
     
     order_by = "ASC" if ranking == "Lowest 10" else "DESC"
     limit_clause = "" if ranking == "All" else "LIMIT 10"
@@ -39,18 +43,19 @@ def get_top_customers(from_date=None, to_date=None, company=None, customer_group
         SELECT 
             si.customer,
             si.customer_name,
+            {qty_select}
             SUM({amount_field}) as total
         FROM `tabSales Invoice` si
         {join_clause}
         WHERE {where_clause}
         GROUP BY si.customer, si.customer_name
-        ORDER BY total {order_by}
+        ORDER BY {sort_field} {order_by}
         {limit_clause}
     """, values, as_dict=True)
 
 
-def get_top_items(from_date=None, to_date=None, company=None, customer_group=None, item_group=None, ranking="Top 10"):
-    base_where, values, join_clause, _ = _get_filter_query(company, customer_group, item_group)
+def get_top_items(from_date=None, to_date=None, company=None, customer_group=None, item_group=None, ranking="Top 10", sort_by="Value"):
+    base_where, values, join_clause, _ = _get_filter_query(company, customer_group, item_group, sort_by)
     
     if not join_clause:
         join_clause = "JOIN `tabSales Invoice Item` sii ON sii.parent = si.name"
@@ -63,6 +68,7 @@ def get_top_items(from_date=None, to_date=None, company=None, customer_group=Non
     values["to_date"] = to_date
     where_clause = f"{base_where} AND si.posting_date BETWEEN %(from_date)s AND %(to_date)s"
     
+    sort_field = "total_qty" if sort_by == "Quantity" else "total"
     order_by = "ASC" if ranking == "Lowest 10" else "DESC"
     limit_clause = "" if ranking == "All" else "LIMIT 10"
 
@@ -76,12 +82,12 @@ def get_top_items(from_date=None, to_date=None, company=None, customer_group=Non
         {join_clause}
         WHERE {where_clause}
         GROUP BY sii.item_code, sii.item_name
-        ORDER BY total {order_by}
+        ORDER BY {sort_field} {order_by}
         {limit_clause}
     """, values, as_dict=True)
 
 
-def get_territory_sales(from_date=None, to_date=None, company=None, customer_group=None, item_group=None, ranking="Top 10"):
+def get_territory_sales(from_date=None, to_date=None, company=None, customer_group=None, item_group=None, ranking="Top 10", sort_by="Value"):
     from_dt = datetime.strptime(from_date, "%Y-%m-%d")
     to_dt = datetime.strptime(to_date, "%Y-%m-%d")
     diff = (to_dt - from_dt).days
@@ -89,7 +95,9 @@ def get_territory_sales(from_date=None, to_date=None, company=None, customer_gro
     prev_from = (from_dt - timedelta(days=diff)).strftime("%Y-%m-%d")
     prev_to = (to_dt - timedelta(days=diff)).strftime("%Y-%m-%d")
 
-    base_where, values_base, join_clause, amount_field = _get_filter_query(company, customer_group, item_group)
+    base_where, values_base, join_clause, amount_field = _get_filter_query(company, customer_group, item_group, sort_by)
+    qty_select = "SUM(sii.stock_qty) as total_qty," if "sii" in join_clause else "0 as total_qty,"
+    sort_field = "total_qty" if sort_by == "Quantity" else "total"
 
     values_current = values_base.copy()
     values_current["from_date"] = from_date
@@ -97,7 +105,7 @@ def get_territory_sales(from_date=None, to_date=None, company=None, customer_gro
     curr_where = f"{base_where} AND si.posting_date BETWEEN %(from_date)s AND %(to_date)s"
     
     current = frappe.db.sql(f"""
-        SELECT si.territory, SUM({amount_field}) as total
+        SELECT si.territory, {qty_select} SUM({amount_field}) as total
         FROM `tabSales Invoice` si {join_clause}
         WHERE {curr_where} GROUP BY si.territory
     """, values_current, as_dict=True)
@@ -108,35 +116,37 @@ def get_territory_sales(from_date=None, to_date=None, company=None, customer_gro
     prev_where = f"{base_where} AND si.posting_date BETWEEN %(prev_from)s AND %(prev_to)s"
     
     previous = frappe.db.sql(f"""
-        SELECT si.territory, SUM({amount_field}) as total
+        SELECT si.territory, {qty_select} SUM({amount_field}) as total
         FROM `tabSales Invoice` si {join_clause}
         WHERE {prev_where} GROUP BY si.territory
     """, values_prev, as_dict=True)
 
-    prev_map = {d.territory: d.total for d in previous}
+    prev_map = {d.territory: d.get(sort_field, 0) for d in previous}
     result = []
 
     for row in current:
-        prev_total = prev_map.get(row.territory, 0)
-        growth = ((row.total - prev_total) / prev_total) * 100 if prev_total else (100 if row.total else 0)
+        prev_val = prev_map.get(row.territory, 0)
+        curr_val = row.get(sort_field, 0)
+        
+        growth = ((curr_val - prev_val) / prev_val) * 100 if prev_val else (100 if curr_val else 0)
 
         result.append({
             "territory": row.territory,
+            "total_qty": row.get("total_qty", 0),
             "total": row.total,
             "growth": round(growth, 2)
         })
 
     reverse_sort = False if ranking == "Lowest 10" else True
-    result.sort(key=lambda x: x["total"], reverse=reverse_sort)
+    result.sort(key=lambda x: x[sort_field], reverse=reverse_sort)
 
     if ranking == "All":
         return result
     return result[:10]
 
 
-# NEW: Warehouse Sales Logic
-def get_warehouse_sales(from_date=None, to_date=None, company=None, customer_group=None, item_group=None, ranking="Top 10"):
-    base_where, values, join_clause, _ = _get_filter_query(company, customer_group, item_group)
+def get_warehouse_sales(from_date=None, to_date=None, company=None, customer_group=None, item_group=None, ranking="Top 10", sort_by="Value"):
+    base_where, values, join_clause, _ = _get_filter_query(company, customer_group, item_group, sort_by)
     
     if not join_clause:
         join_clause = "JOIN `tabSales Invoice Item` sii ON sii.parent = si.name"
@@ -146,6 +156,7 @@ def get_warehouse_sales(from_date=None, to_date=None, company=None, customer_gro
     values["to_date"] = to_date
     where_clause = f"{base_where} AND si.posting_date BETWEEN %(from_date)s AND %(to_date)s AND sii.warehouse IS NOT NULL AND sii.warehouse != ''"
     
+    sort_field = "total_qty" if sort_by == "Quantity" else "total"
     order_by = "ASC" if ranking == "Lowest 10" else "DESC"
     limit_clause = "" if ranking == "All" else "LIMIT 10"
 
@@ -158,12 +169,12 @@ def get_warehouse_sales(from_date=None, to_date=None, company=None, customer_gro
         {join_clause}
         WHERE {where_clause}
         GROUP BY sii.warehouse
-        ORDER BY total {order_by}
+        ORDER BY {sort_field} {order_by}
         {limit_clause}
     """, values, as_dict=True)
 
-
-def get_customer_comparison(from_date=None, to_date=None, company=None, customers=None, bifurcation="Daily"):
+# UPDATED: Added item_code parameter
+def get_customer_comparison(from_date=None, to_date=None, company=None, customers=None, bifurcation="Daily", item_code=None):
     if not customers:
         return []
         
@@ -173,6 +184,11 @@ def get_customer_comparison(from_date=None, to_date=None, company=None, customer
     if company:
         conditions.append("si.company = %(company)s")
         values["company"] = company
+
+    # Apply Item Filter if selected
+    if item_code:
+        conditions.append("sii.item_code = %(item_code)s")
+        values["item_code"] = item_code
         
     for i, cust in enumerate(customers):
         values[f"cust_{i}"] = cust
@@ -208,25 +224,27 @@ def get_customer_comparison(from_date=None, to_date=None, company=None, customer
 # MASTER OPTIMIZED ENDPOINT
 # =========================
 @frappe.whitelist()
-def get_dashboard_data(from_date, to_date, ranking, company=None, customer_group=None, item_group=None, 
-                       fetch_customers=0, fetch_items=0, fetch_territories=0, fetch_warehouses=0, fetch_comparison=0, compare_customers=None, bifurcation="Daily"):
+# UPDATED: Added compare_item parameter
+def get_dashboard_data(from_date, to_date, ranking, sort_by="Value", company=None, customer_group=None, item_group=None, 
+                       fetch_customers=0, fetch_items=0, fetch_territories=0, fetch_warehouses=0, fetch_comparison=0, 
+                       compare_customers=None, compare_item=None, bifurcation="Daily"):
     
     data = {}
 
     if int(fetch_customers):
-        data["customers"] = get_top_customers(from_date, to_date, company, customer_group, item_group, ranking)
+        data["customers"] = get_top_customers(from_date, to_date, company, customer_group, item_group, ranking, sort_by)
     
     if int(fetch_items):
-        data["items"] = get_top_items(from_date, to_date, company, customer_group, item_group, ranking)
+        data["items"] = get_top_items(from_date, to_date, company, customer_group, item_group, ranking, sort_by)
     
     if int(fetch_territories):
-        data["territories"] = get_territory_sales(from_date, to_date, company, customer_group, item_group, ranking)
+        data["territories"] = get_territory_sales(from_date, to_date, company, customer_group, item_group, ranking, sort_by)
 
     if int(fetch_warehouses):
-        data["warehouses"] = get_warehouse_sales(from_date, to_date, company, customer_group, item_group, ranking)
+        data["warehouses"] = get_warehouse_sales(from_date, to_date, company, customer_group, item_group, ranking, sort_by)
 
     if int(fetch_comparison) and compare_customers:
         customers_list = json.loads(compare_customers)
-        data["comparison"] = get_customer_comparison(from_date, to_date, company, customers_list, bifurcation)
+        data["comparison"] = get_customer_comparison(from_date, to_date, company, customers_list, bifurcation, compare_item)
 
     return data
