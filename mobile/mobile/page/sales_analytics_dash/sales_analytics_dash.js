@@ -32,7 +32,15 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
         </style>`).appendTo('head');
     }
 
-    function show_loader() { 
+    function fmt_currency(v) {
+        return format_currency(parseFloat((Number(v) || 0).toFixed(2)));
+    }
+
+    function fmt_qty(v) {
+        return parseFloat((Number(v) || 0).toFixed(2));
+    }
+
+    function show_loader() {
         $("#dashboard-loader").css('display','flex'); 
         if (page.btn_primary) page.btn_primary.prop('disabled', true);
     }
@@ -151,7 +159,10 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
     // ======================
     let customer_section = $(`
         <div id="customer-section" style="margin-top:20px; display:none;">
-            <h3>Customer Sales</h3>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                <h3 style="margin: 0;">Customer Sales</h3>
+                <div id="customer-summary"></div>
+            </div>
             <div id="top-customers-container" style="display:flex;flex-wrap:wrap;gap:15px;margin-bottom:20px;"></div>
             <div id="customer-chart"></div>
         </div>
@@ -159,7 +170,10 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
 
     let item_section = $(`
         <div id="item-section" style="margin-top:30px; border-top: 1px solid #e5e7eb; padding-top: 20px; display:none;">
-            <h3>Item Sales</h3>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                <h3 style="margin: 0;">Item Sales</h3>
+                <div id="item-summary"></div>
+            </div>
             <div id="top-items-container" style="display:flex;flex-wrap:wrap;gap:15px;margin-bottom:20px;"></div>
             <div id="item-chart"></div>
         </div>
@@ -167,7 +181,10 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
 
     let territory_section = $(`
         <div id="territory-section" style="margin-top:30px; border-top: 1px solid #e5e7eb; padding-top: 20px; display:none;">
-            <h3>Territory Sales</h3>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                <h3 style="margin: 0;">Territory Sales</h3>
+                <div id="territory-summary"></div>
+            </div>
             <div id="territory-cards-container" style="display:flex;flex-wrap:wrap;gap:15px;margin-bottom:20px;"></div>
             <div id="territory-chart"></div>
         </div>
@@ -264,13 +281,31 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
     // ======================
     function render_customers(data) {
         let container = $("#top-customers-container");
+        let summary_container = $("#customer-summary");
         if (!data || data.length === 0) {
             container.html("<p class='text-muted'>No Customer Data Found.</p>");
+            summary_container.empty();
             if (customer_chart) { customer_chart.destroy(); customer_chart = null; }
             return;
         }
 
-        let html = ""; 
+        let grand_total_val = data.reduce((sum, row) => sum + (Number(row.total) || 0), 0);
+        let grand_total_qty = data.reduce((sum, row) => sum + (Number(row.total_qty) || 0), 0);
+        summary_container.html(`
+            <div style="display:flex; gap: 20px; padding: 8px 16px; background: #f8fafc; border-radius: 8px; border: 1px solid #e2e8f0;">
+                <div>
+                    <div style="font-size: 11px; color: #64748b; text-transform: uppercase; font-weight: 600;">Total Value</div>
+                    <div style="font-size: 16px; font-weight: 700; color: #16a34a;">${fmt_currency(grand_total_val)}</div>
+                </div>
+                <div style="width: 1px; background: #cbd5e1;"></div>
+                <div>
+                    <div style="font-size: 11px; color: #64748b; text-transform: uppercase; font-weight: 600;">Total Qty</div>
+                    <div style="font-size: 16px; font-weight: 700; color: #f59e0b;">${fmt_qty(grand_total_qty)}</div>
+                </div>
+            </div>
+        `);
+
+        let html = "";
         let labels = [];
         let values = [];
         let ranking = ranking_filter.get_value();
@@ -290,7 +325,7 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
                     <div style="font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${name}</div>
                     <div style="font-size: 12px; color: #4b5563;">${cust.customer}</div>
                     <div style="color:#16a34a;font-weight:bold; margin-top: 8px; font-size: 16px;">
-                        ${format_currency(cust.total)}
+                        ${fmt_currency(cust.total)}
                     </div>
                     
                 </div>
@@ -306,18 +341,36 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
                 title: `Sales by Customer (${sort_by})`, data: chart_data, type: 'bar', height: 320,
                 axisOptions: { xAxisMode: 'tick', xIsSeries: false, shortenYAxisNumbers: 1 }, 
                 barOptions: { spaceRatio: 0.3 }, 
-                tooltipOptions: { formatTooltipY: d => sort_by === 'Quantity' ? d : format_currency(d) }
+                tooltipOptions: { formatTooltipY: d => sort_by === 'Quantity' ? d : fmt_currency(d) }
             });
         }
     }
 
     function render_items(data) {
         let container = $("#top-items-container");
+        let summary_container = $("#item-summary");
         if (!data || data.length === 0) {
             container.html("<p class='text-muted'>No Item Data Found.</p>");
+            summary_container.empty();
             if (item_chart) { item_chart.destroy(); item_chart = null; }
             return;
         }
+
+        let grand_total_val = data.reduce((sum, row) => sum + (Number(row.total) || 0), 0);
+        let grand_total_qty = data.reduce((sum, row) => sum + (Number(row.total_qty) || 0), 0);
+        summary_container.html(`
+            <div style="display:flex; gap: 20px; padding: 8px 16px; background: #f8fafc; border-radius: 8px; border: 1px solid #e2e8f0;">
+                <div>
+                    <div style="font-size: 11px; color: #64748b; text-transform: uppercase; font-weight: 600;">Total Value</div>
+                    <div style="font-size: 16px; font-weight: 700; color: #2563eb;">${fmt_currency(grand_total_val)}</div>
+                </div>
+                <div style="width: 1px; background: #cbd5e1;"></div>
+                <div>
+                    <div style="font-size: 11px; color: #64748b; text-transform: uppercase; font-weight: 600;">Total Qty</div>
+                    <div style="font-size: 16px; font-weight: 700; color: #f59e0b;">${fmt_qty(grand_total_qty)}</div>
+                </div>
+            </div>
+        `);
 
         let html = ""; let labels = []; let values = [];
         let ranking = ranking_filter.get_value();
@@ -337,10 +390,10 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
                     <div style="font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${name}</div>
                     <div style="font-size: 12px; color: #4b5563;">${itm.item_code}</div>
                     <div style="color:#2563eb;font-weight:bold; margin-top: 8px; font-size: 16px;">
-                        ${format_currency(itm.total)}
+                        ${fmt_currency(itm.total)}
                     </div>
                     <div style="color:#6b7280; font-size: 13px; font-weight: 500; margin-top: 4px;">
-                        <span style="color:#0ea5e9; font-weight: 600;">${qty}</span> Units Sold
+                        <span style="color:#0ea5e9; font-weight: 600;">${fmt_qty(qty)}</span> Units Sold
                     </div>
                 </div>
             `;
@@ -355,18 +408,36 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
                 title: `Sales by Item (${sort_by})`, data: chart_data, type: 'bar', height: 320,
                 axisOptions: { xAxisMode: 'tick', xIsSeries: false, shortenYAxisNumbers: 1 }, 
                 barOptions: { spaceRatio: 0.3 }, 
-                tooltipOptions: { formatTooltipY: d => sort_by === 'Quantity' ? d : format_currency(d) }
+                tooltipOptions: { formatTooltipY: d => sort_by === 'Quantity' ? d : fmt_currency(d) }
             });
         }
     }
 
     function render_territories(data) {
         let container = $("#territory-cards-container");
+        let summary_container = $("#territory-summary");
         if (!data || data.length === 0) {
             container.html("<p class='text-muted'>No Territory Data Found.</p>");
+            summary_container.empty();
             if (territory_chart) { territory_chart.destroy(); territory_chart = null; }
             return;
         }
+
+        let grand_total_val = data.reduce((sum, row) => sum + (Number(row.total) || 0), 0);
+        let grand_total_qty = data.reduce((sum, row) => sum + (Number(row.total_qty) || 0), 0);
+        summary_container.html(`
+            <div style="display:flex; gap: 20px; padding: 8px 16px; background: #f8fafc; border-radius: 8px; border: 1px solid #e2e8f0;">
+                <div>
+                    <div style="font-size: 11px; color: #64748b; text-transform: uppercase; font-weight: 600;">Total Value</div>
+                    <div style="font-size: 16px; font-weight: 700; color: #2563eb;">${fmt_currency(grand_total_val)}</div>
+                </div>
+                <div style="width: 1px; background: #cbd5e1;"></div>
+                <div>
+                    <div style="font-size: 11px; color: #64748b; text-transform: uppercase; font-weight: 600;">Total Qty</div>
+                    <div style="font-size: 16px; font-weight: 700; color: #f59e0b;">${fmt_qty(grand_total_qty)}</div>
+                </div>
+            </div>
+        `);
 
         let html = ""; let labels = []; let values = [];
         let sort_by = sort_by_filter.get_value();
@@ -385,10 +456,10 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
                     <div style="color:#6b7280; font-size: 12px;">#${index+1}</div>
                     <div style="font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${name}</div>
                     <div style="color:#2563eb;font-weight:bold; margin-top: 8px; font-size: 16px;">
-                        ${format_currency(row.total)}
+                        ${fmt_currency(row.total)}
                     </div>
                     <div style="color:#6b7280; font-size: 13px; font-weight: 500; margin-top: 4px;">
-                        <span style="color:#0ea5e9; font-weight: 600;">${qty}</span> Units Sold
+                        <span style="color:#0ea5e9; font-weight: 600;">${fmt_qty(qty)}</span> Units Sold
                     </div>
                     <div style="color:${growth_color}; font-size: 13px; margin-top: 4px;">
                         ${arrow} ${Math.abs(row.growth)}% vs Prev Period
@@ -406,7 +477,7 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
                 title: `Sales by Territory (${sort_by})`, data: chart_data, type: 'bar', height: 320,
                 axisOptions: { xAxisMode: 'tick', xIsSeries: false, shortenYAxisNumbers: 1 }, 
                 barOptions: { spaceRatio: 0.3 }, 
-                tooltipOptions: { formatTooltipY: d => sort_by === 'Quantity' ? d : format_currency(d) }
+                tooltipOptions: { formatTooltipY: d => sort_by === 'Quantity' ? d : fmt_currency(d) }
             });
         }
     }
@@ -431,12 +502,12 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
             <div style="display:flex; gap: 20px; padding: 8px 16px; background: #f8fafc; border-radius: 8px; border: 1px solid #e2e8f0;">
                 <div>
                     <div style="font-size: 11px; color: #64748b; text-transform: uppercase; font-weight: 600;">Total Value</div>
-                    <div style="font-size: 16px; font-weight: 700; color: #10b981;">${format_currency(grand_total_val)}</div>
+                    <div style="font-size: 16px; font-weight: 700; color: #10b981;">${fmt_currency(grand_total_val)}</div>
                 </div>
                 <div style="width: 1px; background: #cbd5e1;"></div>
                 <div>
                     <div style="font-size: 11px; color: #64748b; text-transform: uppercase; font-weight: 600;">Total Qty</div>
-                    <div style="font-size: 16px; font-weight: 700; color: #f59e0b;">${grand_total_qty}</div>
+                    <div style="font-size: 16px; font-weight: 700; color: #f59e0b;">${fmt_qty(grand_total_qty)}</div>
                 </div>
             </div>
         `);
@@ -458,10 +529,10 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
                     <div style="color:#6b7280; font-size: 12px;">#${index+1}</div>
                     <div style="font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${name}</div>
                     <div style="color:#10b981;font-weight:bold; margin-top: 8px; font-size: 16px;">
-                        ${format_currency(row.total)}
+                        ${fmt_currency(row.total)}
                     </div>
                     <div style="color:#6b7280; font-size: 13px; font-weight: 500; margin-top: 4px;">
-                        <span style="color:#f59e0b; font-weight: 600;">${qty}</span> Units Sold
+                        <span style="color:#f59e0b; font-weight: 600;">${fmt_qty(qty)}</span> Units Sold
                     </div>
                 </div>
             `;
@@ -477,7 +548,7 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
                 colors: ['#10b981'], 
                 axisOptions: { xAxisMode: 'tick', xIsSeries: false, shortenYAxisNumbers: 1 }, 
                 barOptions: { spaceRatio: 0.3 }, 
-                tooltipOptions: { formatTooltipY: d => sort_by === 'Quantity' ? d : format_currency(d) }
+                tooltipOptions: { formatTooltipY: d => sort_by === 'Quantity' ? d : fmt_currency(d) }
             });
         }
     }
@@ -505,11 +576,11 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
                     <div style="font-weight: 700; font-size: 16px; margin-bottom: 12px; color:#1e293b;">${cust}${selected_item}</div>
                     <div style="margin-bottom: 8px;">
                         <span style="font-size:12px; color:#64748b; text-transform:uppercase;">Overall Value</span><br>
-                        <span style="color:#16a34a; font-weight:bold; font-size: 20px;">${format_currency(total_val)}</span>
+                        <span style="color:#16a34a; font-weight:bold; font-size: 20px;">${fmt_currency(total_val)}</span>
                     </div>
                     <div>
                         <span style="font-size:12px; color:#64748b; text-transform:uppercase;">Overall Items Sold</span><br>
-                        <span style="color:#0ea5e9; font-weight:bold; font-size: 20px;">${total_qty}</span>
+                        <span style="color:#0ea5e9; font-weight:bold; font-size: 20px;">${fmt_qty(total_qty)}</span>
                     </div>
                 </div>
             `;
@@ -550,7 +621,7 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
             title: `Value Comparison (${bifurcation.get_value()})`,
             data: chart_data_val, type: 'line', height: 280, colors: line_colors,
             axisOptions: { xAxisMode: 'tick', xIsSeries: true, shortenYAxisNumbers: 1 },
-            tooltipOptions: { formatTooltipY: d => format_currency(d) },
+            tooltipOptions: { formatTooltipY: d => fmt_currency(d) },
             lineOptions: { regionFill: 1, hideDots: 0 }
         });
 
