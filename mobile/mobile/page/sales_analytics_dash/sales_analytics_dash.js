@@ -65,7 +65,7 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
     let filter_type = page.add_field({
         label: 'Filter By',
         fieldtype: 'Select',
-        options: ['', 'Customer', 'Territory', 'Item', 'Warehouse', 'Customer Comparison'],
+        options: ['', 'Customer', 'Route', 'Item', 'Warehouse', 'Customer Comparison'],
         change() {
             let type = filter_type.get_value();
             
@@ -182,7 +182,7 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
     let territory_section = $(`
         <div id="territory-section" style="margin-top:30px; border-top: 1px solid #e5e7eb; padding-top: 20px; display:none;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-                <h3 style="margin: 0;">Territory Sales</h3>
+                <h3 style="margin: 0;">Route Sales</h3>
                 <div id="territory-summary"></div>
             </div>
             <div id="territory-cards-container" style="display:flex;flex-wrap:wrap;gap:15px;margin-bottom:20px;"></div>
@@ -222,7 +222,7 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
         
         let fetch_customers = (type === 'Customer' || !type) ? 1 : 0;
         let fetch_items = (type === 'Item' || !type) ? 1 : 0;
-        let fetch_territories = (type === 'Territory' || !type) ? 1 : 0;
+        let fetch_territories = (type === 'Route' || !type) ? 1 : 0;
         let fetch_warehouses = (type === 'Warehouse' || !type) ? 1 : 0;
         let fetch_comparison = (type === 'Customer Comparison') ? 1 : 0;
         
@@ -445,7 +445,7 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
         data.forEach((row, index) => {
             let growth_color = row.growth >= 0 ? "#16a34a" : "#dc2626";
             let arrow = row.growth >= 0 ? "▲" : "▼";
-            let name = row.territory || "No Territory";
+            let name = row.route || "No Route";
             let qty = Number(row.total_qty) || 0;
 
             labels.push(name.length > 15 ? name.substring(0, 15) + "..." : name);
@@ -474,7 +474,7 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
         if (territory_chart) { territory_chart.update(chart_data); } 
         else {
             territory_chart = new frappe.Chart("#territory-chart", {
-                title: `Sales by Territory (${sort_by})`, data: chart_data, type: 'bar', height: 320,
+                title: `Sales by Route (${sort_by})`, data: chart_data, type: 'bar', height: 320,
                 axisOptions: { xAxisMode: 'tick', xIsSeries: false, shortenYAxisNumbers: 1 }, 
                 barOptions: { spaceRatio: 0.3 }, 
                 tooltipOptions: { formatTooltipY: d => sort_by === 'Quantity' ? d : fmt_currency(d) }

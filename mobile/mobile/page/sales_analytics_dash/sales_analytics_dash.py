@@ -103,35 +103,35 @@ def get_territory_sales(from_date=None, to_date=None, company=None, customer_gro
     values_current["from_date"] = from_date
     values_current["to_date"] = to_date
     curr_where = f"{base_where} AND si.posting_date BETWEEN %(from_date)s AND %(to_date)s"
-    
+
     current = frappe.db.sql(f"""
-        SELECT si.territory, {qty_select} SUM({amount_field}) as total
+        SELECT si.route, {qty_select} SUM({amount_field}) as total
         FROM `tabSales Invoice` si {join_clause}
-        WHERE {curr_where} GROUP BY si.territory
+        WHERE {curr_where} GROUP BY si.route
     """, values_current, as_dict=True)
 
     values_prev = values_base.copy()
     values_prev["prev_from"] = prev_from
     values_prev["prev_to"] = prev_to
     prev_where = f"{base_where} AND si.posting_date BETWEEN %(prev_from)s AND %(prev_to)s"
-    
+
     previous = frappe.db.sql(f"""
-        SELECT si.territory, {qty_select} SUM({amount_field}) as total
+        SELECT si.route, {qty_select} SUM({amount_field}) as total
         FROM `tabSales Invoice` si {join_clause}
-        WHERE {prev_where} GROUP BY si.territory
+        WHERE {prev_where} GROUP BY si.route
     """, values_prev, as_dict=True)
 
-    prev_map = {d.territory: d.get(sort_field, 0) for d in previous}
+    prev_map = {d.route: d.get(sort_field, 0) for d in previous}
     result = []
 
     for row in current:
-        prev_val = prev_map.get(row.territory, 0)
+        prev_val = prev_map.get(row.route, 0)
         curr_val = row.get(sort_field, 0)
-        
+
         growth = ((curr_val - prev_val) / prev_val) * 100 if prev_val else (100 if curr_val else 0)
 
         result.append({
-            "territory": row.territory,
+            "route": row.route,
             "total_qty": row.get("total_qty", 0),
             "total": row.total,
             "growth": round(growth, 2)
