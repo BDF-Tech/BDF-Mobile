@@ -358,6 +358,10 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
 
         let grand_total_val = data.reduce((sum, row) => sum + (Number(row.total) || 0), 0);
         let grand_total_qty = data.reduce((sum, row) => sum + (Number(row.total_qty) || 0), 0);
+        // Sum total_kg_sold only for rows where it is not null
+        let grand_total_kg = data.reduce((sum, row) => sum + (row.total_kg_sold != null ? Number(row.total_kg_sold) : 0), 0);
+        let show_kg_summary = data.some(row => row.total_kg_sold != null);
+
         summary_container.html(`
             <div style="display:flex; gap: 20px; padding: 8px 16px; background: #f8fafc; border-radius: 8px; border: 1px solid #e2e8f0;">
                 <div>
@@ -369,6 +373,12 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
                     <div style="font-size: 11px; color: #64748b; text-transform: uppercase; font-weight: 600;">Total Qty</div>
                     <div style="font-size: 16px; font-weight: 700; color: #f59e0b;">${fmt_qty(grand_total_qty)}</div>
                 </div>
+                ${show_kg_summary ? `
+                <div style="width: 1px; background: #cbd5e1;"></div>
+                <div>
+                    <div style="font-size: 11px; color: #64748b; text-transform: uppercase; font-weight: 600;">Total KG Sold</div>
+                    <div style="font-size: 16px; font-weight: 700; color: #8b5cf6;">${parseFloat(grand_total_kg.toFixed(3))} kg</div>
+                </div>` : ''}
             </div>
         `);
 
@@ -380,7 +390,13 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
             let highlight = index < 3 && (ranking === 'Top 10' || ranking === 'All') ? 'border:2px solid #16a34a;' : '';
             let name = itm.item_name || itm.item_code;
             let qty = Number(itm.total_qty) || 0;
-            
+            let kg_sold = itm.total_kg_sold;
+            let kg_line = kg_sold != null
+                ? `<div style="color:#6b7280; font-size: 13px; font-weight: 500; margin-top: 3px;">
+                       <span style="color:#8b5cf6; font-weight: 700;">${parseFloat(Number(kg_sold).toFixed(3))} kg</span> Sold (weight)
+                   </div>`
+                : '';
+
             labels.push(name.length > 15 ? name.substring(0, 15) + "..." : name);
             values.push(sort_by === 'Quantity' ? qty : (Number(itm.total) || 0));
 
@@ -395,6 +411,7 @@ frappe.pages['sales-analytics-dash'].on_page_load = function(wrapper) {
                     <div style="color:#6b7280; font-size: 13px; font-weight: 500; margin-top: 4px;">
                         <span style="color:#0ea5e9; font-weight: 600;">${fmt_qty(qty)}</span> Units Sold
                     </div>
+                    ${kg_line}
                 </div>
             `;
         });

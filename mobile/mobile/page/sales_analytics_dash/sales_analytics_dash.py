@@ -2,6 +2,48 @@ import frappe
 import json
 from datetime import datetime, timedelta
 
+
+def _to_kg(weight_per_unit, weight_uom):
+    """
+    Converts weight_per_unit + weight_uom (from Item master) to kg.
+
+    UOM mapping
+    -----------
+    kg / kgs / kilogram       → as-is
+    g  / gm  / gram / grams   → ÷ 1000
+    ml / milliliter           → ÷ 1000  (1 ml ≈ 1 g for dairy)
+    l  / ltr / liter / litre  → as-is   (1 litre ≈ 1 kg for dairy)
+    lb / lbs / pound          → × 0.453592
+
+    Returns None if UOM is unrecognised or weight is zero / missing.
+    """
+    if not weight_per_unit or not weight_uom:
+        return None
+
+    val  = float(weight_per_unit)
+    unit = weight_uom.strip().lower()
+
+    if val <= 0:
+        return None
+
+    uom_map = {
+        # kg family
+        "kg": 1, "kgs": 1, "kilogram": 1, "kilograms": 1,
+        # gram family
+        "g": 1/1000, "gm": 1/1000, "gram": 1/1000, "grams": 1/1000,
+        # ml / litre family
+        "ml": 1/1000, "milliliter": 1/1000, "millilitre": 1/1000,
+        "l": 1, "ltr": 1, "liter": 1, "litre": 1,
+        # pound
+        "lb": 0.453592, "lbs": 0.453592, "pound": 0.453592,
+    }
+
+    factor = uom_map.get(unit)
+    if factor is None:
+        return None
+
+    return val * factor
+
 def _get_filter_query(company, customer_group, item_group, sort_by="Value"):
     conditions = ["si.docstatus = 1"]
     values = {}
@@ -72,12 +114,15 @@ def get_top_items(from_date=None, to_date=None, company=None, customer_group=Non
     order_by = "ASC" if ranking == "Lowest 10" else "DESC"
     limit_clause = "" if ranking == "All" else "LIMIT 10"
 
-    return frappe.db.sql(f"""
-        SELECT 
+    rows = frappe.db.sql(f"""
+        SELECT
             sii.item_code,
             sii.item_name,
-            SUM(sii.stock_qty) as total_qty,
-            SUM({amount_field}) as total
+            SUM(sii.stock_qty)  AS total_qty,
+            SUM({amount_field}) AS total,
+            -- Pull weight fields from Item master (same row per group, so MAX is fine)
+            MAX(i.weight_per_unit) AS weight_per_unit,
+            MAX(i.weight_uom)      AS weight_uom
         FROM `tabSales Invoice` si
         {join_clause}
         WHERE {where_clause}
@@ -85,6 +130,18 @@ def get_top_items(from_date=None, to_date=None, company=None, customer_group=Non
         ORDER BY {sort_field} {order_by}
         {limit_clause}
     """, values, as_dict=True)
+
+    # Calculate total_kg_sold using Item master weight fields
+    for row in rows:
+        kg_per_unit = _to_kg(row.get("weight_per_unit"), row.get("weight_uom"))
+        if kg_per_unit is not None:
+            row["total_kg_sold"] = round(
+                float(row.get("total_qty") or 0) * kg_per_unit, 3
+            )
+        else:
+            row["total_kg_sold"] = None   # weight_per_unit / weight_uom not set on item
+
+    return rows
 
 
 def get_territory_sales(from_date=None, to_date=None, company=None, customer_group=None, item_group=None, ranking="Top 10", sort_by="Value"):
