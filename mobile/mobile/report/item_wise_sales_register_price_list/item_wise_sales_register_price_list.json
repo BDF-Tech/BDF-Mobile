@@ -1,0 +1,92 @@
+{
+ "add_total_row": 0,
+ "add_translate_data": 0,
+ "columns": [],
+ "creation": "2026-05-22 18:29:54.368057",
+ "disabled": 0,
+ "docstatus": 0,
+ "doctype": "Report",
+ "filters": [],
+ "idx": 0,
+ "is_standard": "Yes",
+ "letter_head": null,
+ "modified": "2026-05-22 18:29:54.368057",
+ "modified_by": "Administrator",
+ "module": "Mobile",
+ "name": "Item-wise Sales Register Price list",
+ "owner": "Administrator",
+ "prepared_report": 0,
+ "ref_doctype": "Sales Invoice",
+ "reference_report": "Item-wise Sales Register",
+ "report_name": "Item-wise Sales Register Price list",
+ "report_type": "Script Report",
+ "roles": [
+  {
+   "role": "Accounts Manager"
+  },
+  {
+   "role": "Accounts User"
+  },
+  {
+   "role": "Warehouse Manager"
+  },
+  {
+   "role": "BDF Sales Manager"
+  },
+  {
+   "role": "System Manager"
+  },
+  {
+   "role": "BDF Recovery"
+  },
+  {
+   "role": "Sales User"
+  },
+  {
+   "role": "BDF Auditor"
+  },
+  {
+   "role": "BDF CA"
+  },
+  {
+   "role": "BDF Sales Invoice Creator"
+  },
+  {
+   "role": "BDF Billing Executive"
+  },
+  {
+   "role": "BDF Sales Return Approvers"
+  },
+  {
+   "role": "BDF Outstanding View"
+  },
+  {
+   "role": "BDF Account Manager"
+  },
+  {
+   "role": "BDF Plant Cash and Ledger Viewer"
+  },
+  {
+   "role": "Employee Self Service"
+  },
+  {
+   "role": "BDF Customer"
+  },
+  {
+   "role": "BDF Temp User"
+  },
+  {
+   "role": "BDF Temp User Role"
+  },
+  {
+   "role": "BDF Customer Credit Limit"
+  },
+  {
+   "role": "BDF SALES  REPORT VIEWER"
+  },
+  {
+   "role": "BDF Sales User"
+  }
+ ],
+ "timeout": 0
+}

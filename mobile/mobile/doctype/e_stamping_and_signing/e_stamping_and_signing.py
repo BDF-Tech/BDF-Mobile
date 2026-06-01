@@ -18,7 +18,7 @@ def get_melento_secrets():
         "esign": {
             "api_key": doc.get_password("signing_api_key"),
             "application_id": doc.get_password("signing_application_id"),
-            "url": "https://api.signdesk.in/api/live/signRequest"
+            "url": "https://uat.signdesk.in/api/sandbox/signRequest"
         }
     }
 
@@ -122,82 +122,90 @@ class Estampingandsigning(Document):
 
     @frappe.whitelist()
     def call_esign_api(self):
+        total_pages = self.total_pages or 1
+        all_pages = [str(p) for p in range(1, total_pages + 1)]
+
         signers_list = []
         for d in self.signer_info_table:
-        # 1. Base Signer Information
             signer_data = {
-            "document_to_be_signed": d.document_to_be_signed or "DOC1",
-            "signer_ref_id": d.signer_ref_id,
-            "signer_name": d.signer_name,
-            "signer_email": d.signer_email,
-            "signer_mobile": str(d.signer_mobile_number),
-            "sequence": int(d.sequence or 1),
-            "signature_type": d.signature_type or "aadhaar",
-            "esign_type": d.esign_type or "otp",
-            "trigger_esign_request": d.trigger_esign_request or "true"
-        }
+                "document_to_be_signed": d.document_to_be_signed or "DOC1",
+                "signer_ref_id": d.signer_ref_id,
+                "signer_name": d.signer_name,
+                "signer_email": d.signer_email,
+                "signer_mobile": str(d.signer_mobile_number),
+                "sequence": int(d.sequence or 1),
+                "signature_type": d.signature_type or "aadhaar",
+                "esign_type": d.esign_type or "otp",
+                "trigger_esign_request": d.trigger_esign_request or "true",
+                "page_number": "all"
+            }
 
-        # Capture the dynamic input from the 'page_number' Data field
-        # We convert to string to ensure the JSON handles it correctly
             user_page = str(d.page_number) if d.page_number else "1"
 
-        # 2. Conditional Logic for Positions & Dynamic Pages
             if d.type_of_signer == "First Party":
-                signer_data["page_number"] = "all"
+                appearance = []
+                for page in range(1, min(3, total_pages + 1)):
+                    appearance.append({
+                        "id": f"_{uuid.uuid4().hex[:8]}",
+                        "x1": 93, "y1": 560, "x2": 203, "y2": 600,
+                        "page_height": 848.16, "page_width": 605.28,
+                        "page": str(page)
+                    })
+                for page in range(3, total_pages + 1):
+                    appearance.append({
+                        "id": f"_{uuid.uuid4().hex[:8]}",
+                        "x1": 72, "y1": 785, "x2": 182, "y2": 825,
+                        "page_height": 842.04, "page_width": 595.32,
+                        "page": str(page)
+                    })
                 signer_data["signer_position"] = {
-                "appearance": [
-                    {
-                        "x1": 40, "y1": 11.65, "x2": 161, "y2": 71.65
-                    }
-                ]
-            }
+                    "page": all_pages,
+                    "appearance": appearance
+                }
 
             elif d.type_of_signer == "Second Party":
-                signer_data["page_number"] = "all"
+                appearance = []
+                for page in range(1, min(3, total_pages + 1)):
+                    appearance.append({
+                        "id": f"_{uuid.uuid4().hex[:8]}",
+                        "x1": 358, "y1": 557, "x2": 468, "y2": 597,
+                        "page_height": 848.16, "page_width": 605.28,
+                        "page": str(page)
+                    })
+                for page in range(3, total_pages + 1):
+                    appearance.append({
+                        "id": f"_{uuid.uuid4().hex[:8]}",
+                        "x1": 336, "y1": 784, "x2": 446, "y2": 824,
+                        "page_height": 842.04, "page_width": 595.32,
+                        "page": str(page)
+                    })
                 signer_data["signer_position"] = {
-                "appearance": [
-                    {
-                        "x1": 302,"y1": 11.65,"x2": 423,"y2": 71.65
-                    }
-                ]
-            }
+                    "page": all_pages,
+                    "appearance": appearance
+                }
 
             elif d.type_of_signer == "Witness 1":
-                signer_data["page_number"] = "all"
                 signer_data["signer_position"] = {
-                "page": [user_page],  # Dynamic page from user input
-                "appearance": [
-                    {
-                        "id": "_a7e1z830r",
-            "x1": 69,
-            "y1": 436,
-            "x2": 179,
-            "y2": 476,
-            "page_height": 842.04,
-            "page_width": 595.32,
-                        "page": user_page  # Matches the outer page array
-                    }
-                ]
-            }
+                    "page": [user_page],
+                    "appearance": [{
+                        "id": f"_{uuid.uuid4().hex[:8]}",
+                        "x1": 82, "y1": 164, "x2": 192, "y2": 204,
+                        "page_height": 842.04, "page_width": 595.32,
+                        "page": user_page
+                    }]
+                }
 
             elif d.type_of_signer == "Witness 2":
-                signer_data["page_number"] = "all"
                 signer_data["signer_position"] = {
-                "page": [user_page],  # Dynamic page from user input
-                "appearance": [
-                    {
-                         "id": "_ril0b38h6",
-            "x1": 69,
-            "y1": 583,
-            "x2": 179,
-            "y2": 623,
-            "page_height": 842.04,
-            "page_width": 595.32,
-                        "page": user_page  # Matches the outer page array
-                    }
-                ]
-            }
-        
+                    "page": [user_page],
+                    "appearance": [{
+                        "id": f"_{uuid.uuid4().hex[:8]}",
+                        "x1": 69, "y1": 583, "x2": 179, "y2": 623,
+                        "page_height": 842.04, "page_width": 595.32,
+                        "page": user_page
+                    }]
+                }
+
             signers_list.append(signer_data)
         content_data = self.request_content if self.choose_actio == "signing" else self.only_content
         payload = {

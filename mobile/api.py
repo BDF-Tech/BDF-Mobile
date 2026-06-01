@@ -638,6 +638,382 @@ def fetch_customer_catalog(customer_id):
 '''
 
 
+# =========================================================
+# CRATE MODULE — EMAIL-BASED IDENTITY HELPERS
+# =========================================================
+
+MASTER_DEPARTMENTS = {"it", "md"}
+DEPARTMENT_MAP = {
+    "driver":     "driver",
+    "dispatch":   "dispatch",
+    "production": "production",
+    "it":         "master",
+    "md":         "master",
+}
+
+
+def _get_department(email):
+    """Extract department from email: sanskar.driver@bastardairyfarm.com → driver"""
+    try:
+        local = email.split("@")[0]
+        return local.split(".")[-1].lower()
+    except Exception:
+        return None
+
+
+def _is_master(user=None):
+    user = user or frappe.session.user
+    return _get_department(user) in MASTER_DEPARTMENTS
+
+
+def _require(*departments):
+    """Allow if user's email department matches, or user is IT/MD (master)."""
+    if frappe.session.user == "Guest":
+        frappe.throw("Please login first", frappe.PermissionError)
+    if _is_master():
+        return
+    dept = _get_department(frappe.session.user)
+    if dept not in departments:
+        frappe.throw("You don't have permission to access this.", frappe.PermissionError)
+
+
+def get_logged_in_driver():
+    user = frappe.session.user
+    if user == "Guest":
+        frappe.throw("Please login first", frappe.PermissionError)
+    driver = frappe.db.get_value("Driver", {"custom_user": user}, "name")
+    if not driver:
+        frappe.throw(f"No Driver linked to user {user}. Please contact admin.")
+    return driver
+
+
+# =========================================================
+# GET USER INFO — called right after login
+# =========================================================
+
+@frappe.whitelist()
+def get_user_info():
+    user = frappe.session.user
+    if user == "Guest":
+        frappe.throw("Please login first", frappe.PermissionError)
+
+    full_name = frappe.utils.get_fullname(user)
+    dept = _get_department(user)
+    user_type = DEPARTMENT_MAP.get(dept, "customer")
+
+    if user_type == "master":
+        return {"user_type": "master", "full_name": full_name, "email": user}
+
+    if user_type == "driver":
+        driver = frappe.db.get_value("Driver", {"custom_user": user}, ["name", "full_name"], as_dict=True)
+        return {
+            "user_type": "driver",
+            "full_name": full_name,
+            "email": user,
+            "driver_id": driver.name if driver else None,
+            "driver_name": driver.full_name if driver else full_name
+        }
+
+    if user_type == "dispatch":
+        return {"user_type": "dispatch", "full_name": full_name, "email": user}
+
+    if user_type == "production":
+        return {"user_type": "production", "full_name": full_name, "email": user}
+
+    if user_type == "customer":
+        try:
+            customer_id = get_logged_in_customer()
+        except Exception:
+            customer_id = None
+        return {"user_type": "customer", "full_name": full_name, "email": user, "customer_id": customer_id}
+
+    return {"user_type": "unknown", "full_name": full_name, "email": user}
+
+
+# =========================================================
+# DRIVER ENDPOINTS
+# =========================================================
+
+@frappe.whitelist()
+def get_driver_vmls(date=None):
+    _require("driver")
+    driver = get_logged_in_driver()
+
+    filters = {"driver": driver, "workflow_state": ["!=", "Cancelled"]}
+    if date:
+        filters["date_and_time"] = ["between", [f"{date} 00:00:00", f"{date} 23:59:59"]]
+
+    return frappe.db.get_list(
+        "Vehicle Movement Log",
+        filters=filters,
+        fields=["name", "date_and_time", "vehicle", "route", "workflow_state"],
+        order_by="creation desc"
+    )
+
+
+@frappe.whitelist()
+def get_driver_vml_details(vml):
+    _require("driver", "dispatch")
+
+    if not frappe.db.exists("Vehicle Movement Log", vml):
+        frappe.throw("VML not found")
+
+    doc = frappe.get_doc("Vehicle Movement Log", vml)
+
+    # Drivers can only view their own VML
+    if _get_department(frappe.session.user) == "driver" and not _is_master():
+        driver = get_logged_in_driver()
+        if doc.driver != driver:
+            frappe.throw("You are not assigned to this VML", frappe.PermissionError)
+
+    rows = []
+    for row in doc.crate_summary:
+        if row.sales_invoice:
+            cd = frappe.db.get_value(
+                "Crate Delivery",
+                {"sales_invoice": row.sales_invoice, "docstatus": 1},
+                ["name", "crates_delivered", "crates_returned", "customer_confirmed"],
+                as_dict=True
+            )
+            customer = frappe.db.get_value("Sales Invoice", row.sales_invoice, "customer")
+            rows.append({
+                "row_type": "invoice",
+                "sales_invoice": row.sales_invoice,
+                "stock_entry": None,
+                "customer": customer,
+                "total_crate_out": flt(row.total_crate_out),
+                "crate_delivery": cd.name if cd else None,
+                "crates_delivered": flt(cd.crates_delivered) if cd else None,
+                "crates_returned": flt(cd.crates_returned) if cd else None,
+                "customer_confirmed": cd.customer_confirmed if cd else 0,
+                "delivery_done": bool(cd)
+            })
+        elif row.stock_entry:
+            try:
+                se_cd = frappe.db.get_value(
+                    "Crate Delivery",
+                    {"stock_entry": row.stock_entry, "docstatus": 1},
+                    ["name", "crates_delivered", "crates_returned"],
+                    as_dict=True
+                )
+            except Exception:
+                se_cd = None
+            rows.append({
+                "row_type": "stock_entry",
+                "sales_invoice": None,
+                "stock_entry": row.stock_entry,
+                "customer": None,
+                "total_crate_out": flt(row.total_crate_out),
+                "crate_delivery": se_cd.name if se_cd else None,
+                "crates_delivered": flt(se_cd.crates_delivered) if se_cd else None,
+                "crates_returned": flt(se_cd.crates_returned) if se_cd else None,
+                "customer_confirmed": 0,
+                "delivery_done": bool(se_cd)
+            })
+
+    loose_crates = []
+    for lc in doc.loose_crate_detail:
+        loose_crates.append({
+            "crate_type": lc.crate_item,
+            "crates_out": flt(lc.crates_out),
+            "crates_in": flt(lc.crates_in),
+            "balance": flt(lc.balance)
+        })
+
+    driver_crate_balance = flt(frappe.db.get_value("Driver", doc.driver, "custom_invoice_crate_balance"))
+
+    return {
+        "name": doc.name,
+        "date": str(doc.date_and_time),
+        "driver": doc.driver,
+        "vehicle": doc.vehicle,
+        "route": doc.route,
+        "workflow_state": doc.workflow_state,
+        "invoice_crate_balance": driver_crate_balance,
+        "deliveries": rows,
+        "loose_crates": loose_crates
+    }
+
+
+@frappe.whitelist()
+def get_driver_profile():
+    _require("driver")
+    driver = get_logged_in_driver()
+
+    d = frappe.db.get_value(
+        "Driver", driver,
+        ["full_name", "license_number", "cell_number", "issuing_date", "expiry_date",
+         "custom_invoice_crate_balance"],
+        as_dict=True
+    )
+    user = frappe.session.user
+    user_doc = frappe.db.get_value("User", user, ["full_name", "user_image"], as_dict=True)
+
+    return {
+        "driver_id": driver,
+        "full_name": d.full_name,
+        "license_number": d.license_number,
+        "cell_number": d.cell_number,
+        "issuing_date": str(d.issuing_date) if d.issuing_date else None,
+        "expiry_date": str(d.expiry_date) if d.expiry_date else None,
+        "crate_balance": flt(d.custom_invoice_crate_balance),
+        "email": user,
+        "image": user_doc.user_image if user_doc else None
+    }
+
+
+@frappe.whitelist()
+def get_driver_pending_deliveries(vml=None):
+    _require("driver")
+    driver = get_logged_in_driver()
+
+    filters = {"driver": driver, "docstatus": 0}
+    if vml:
+        filters["vehicle_movement_log"] = vml
+
+    return frappe.db.get_list(
+        "Crate Delivery",
+        filters=filters,
+        fields=["name", "date", "sales_invoice", "customer", "vehicle_movement_log",
+                "crates_delivered", "crates_returned", "invoice_crate_qty"],
+        order_by="creation desc"
+    )
+
+
+# =========================================================
+# DRIVER — CREATE CRATE DELIVERY
+# =========================================================
+
+@frappe.whitelist()
+def create_crate_delivery(vml, sales_invoice=None, stock_entry=None, crates_delivered=0, crates_returned=0):
+    _require("driver")
+    driver = get_logged_in_driver()
+
+    if not sales_invoice and not stock_entry:
+        frappe.throw("Either sales_invoice or stock_entry is required.")
+
+    vml_state = frappe.db.get_value("Vehicle Movement Log", vml, "workflow_state")
+    if vml_state != "Submitted":
+        frappe.throw(f"Crate Delivery can only be created after the trip is submitted. Current status: {vml_state}")
+
+    if sales_invoice:
+        existing = frappe.db.get_value("Crate Delivery", {"sales_invoice": sales_invoice, "docstatus": 1}, "name")
+        if existing:
+            frappe.throw(f"A Crate Delivery ({existing}) already exists for this invoice.")
+        draft = frappe.db.get_value("Crate Delivery", {"sales_invoice": sales_invoice, "docstatus": 0}, "name")
+        if draft:
+            frappe.throw(f"A draft Crate Delivery ({draft}) already exists for this invoice.")
+    else:
+        existing = frappe.db.get_value("Crate Delivery", {"stock_entry": stock_entry, "docstatus": 1}, "name")
+        if existing:
+            frappe.throw(f"A Crate Delivery ({existing}) already exists for this stock entry.")
+        draft = frappe.db.get_value("Crate Delivery", {"stock_entry": stock_entry, "docstatus": 0}, "name")
+        if draft:
+            frappe.throw(f"A draft Crate Delivery ({draft}) already exists for this stock entry.")
+
+    cd = frappe.new_doc("Crate Delivery")
+    cd.vehicle_movement_log = vml
+    if sales_invoice:
+        cd.sales_invoice = sales_invoice
+    if stock_entry:
+        cd.stock_entry = stock_entry
+    cd.crates_delivered = flt(crates_delivered)
+    cd.crates_returned = flt(crates_returned)
+    cd.insert(ignore_permissions=True)
+    cd.submit()
+
+    return {
+        "status": "success",
+        "crate_delivery": cd.name,
+        "crates_delivered": cd.crates_delivered,
+        "crates_returned": cd.crates_returned,
+        "customer": cd.actual_customer if sales_invoice else None
+    }
+
+
+@frappe.whitelist()
+def confirm_customer_otp(crate_delivery):
+    _require("driver")
+
+    if not frappe.db.exists("Crate Delivery", crate_delivery):
+        frappe.throw("Crate Delivery not found")
+
+    doc = frappe.get_doc("Crate Delivery", crate_delivery)
+
+    if doc.docstatus != 1:
+        frappe.throw("Crate Delivery must be submitted before confirming OTP.")
+
+    if doc.customer_confirmed:
+        return {"status": "already_confirmed", "crate_delivery": crate_delivery}
+
+    frappe.db.set_value("Crate Delivery", crate_delivery, "customer_confirmed", 1)
+
+    return {"status": "confirmed", "crate_delivery": crate_delivery}
+
+
+# =========================================================
+# DISPATCH ENDPOINTS
+# =========================================================
+
+@frappe.whitelist()
+def get_dispatch_vmls(date=None):
+    _require("dispatch")
+    target_date = date or today()
+
+    return frappe.db.get_list(
+        "Vehicle Movement Log",
+        filters={
+            "date_and_time": ["between", [f"{target_date} 00:00:00", f"{target_date} 23:59:59"]],
+            "workflow_state": ["!=", "Cancelled"]
+        },
+        fields=["name", "date_and_time", "driver", "vehicle", "route", "workflow_state",
+                "custom_invoice_crate_balance"],
+        order_by="creation desc"
+    )
+
+
+@frappe.whitelist()
+def get_dispatch_driver_balances():
+    _require("dispatch")
+
+    return frappe.db.get_list(
+        "Driver",
+        filters={"status": "Active"},
+        fields=["name", "full_name", "custom_invoice_crate_balance"]
+    )
+
+
+# =========================================================
+# CUSTOMER CRATE ENDPOINTS
+# =========================================================
+
+@frappe.whitelist()
+def get_customer_crate_balance():
+    _require("customer")
+    customer_id = get_logged_in_customer()
+
+    balance = flt(frappe.db.get_value("Customer", customer_id, "custom_current_crate_balance"))
+    return {"customer_id": customer_id, "crate_balance": balance}
+
+
+@frappe.whitelist()
+def get_customer_crate_ledger(filter_type="Last 7 Days", start_date=None, end_date=None):
+    _require("customer")
+    customer_id = get_logged_in_customer()
+    from_date, to_date = get_date_range(filter_type, start_date, end_date)
+
+    return frappe.db.get_list(
+        "Customer Crate Ledger",
+        filters={
+            "customer": customer_id,
+            "posting_date": ["between", [from_date, to_date]]
+        },
+        fields=["name", "posting_date", "entry_type", "crates_out", "crates_in",
+                "balance_crates", "sales_invoice", "crate_delivery"],
+        order_by="posting_date desc, creation desc"
+    )
+
+
 @frappe.whitelist(allow_guest=True)
 def s(v=None):
     # Pass 'v' from the URL to your main function
