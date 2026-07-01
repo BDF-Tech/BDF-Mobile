@@ -739,7 +739,7 @@ def get_driver_vmls(date=None):
     _require("driver")
     driver = get_logged_in_driver()
 
-    filters = {"driver": driver, "workflow_state": ["!=", "Cancelled"]}
+    filters = {"driver": driver, "workflow_state": "Dispatch Loading"}
     if date:
         filters["date_and_time"] = ["between", [f"{date} 00:00:00", f"{date} 23:59:59"]]
 
@@ -769,24 +769,50 @@ def get_driver_vml_details(vml):
     rows = []
     for row in doc.crate_summary:
         if row.sales_invoice:
+            # Check for submitted CD first, then draft (OTP pending)
             cd = frappe.db.get_value(
                 "Crate Delivery",
                 {"sales_invoice": row.sales_invoice, "docstatus": 1},
                 ["name", "crates_delivered", "crates_returned", "customer_confirmed"],
                 as_dict=True
             )
-            customer = frappe.db.get_value("Sales Invoice", row.sales_invoice, "customer")
+            cd_is_draft = False
+            if not cd:
+                cd = frappe.db.get_value(
+                    "Crate Delivery",
+                    {"sales_invoice": row.sales_invoice, "docstatus": 0},
+                    ["name", "crates_delivered", "crates_returned", "customer_confirmed"],
+                    as_dict=True
+                )
+                if cd:
+                    cd_is_draft = True
+            si_data = frappe.db.get_value(
+                "Sales Invoice", row.sales_invoice,
+                ["customer", "customer_name"], as_dict=True
+            )
+            otp_confirmed = bool(cd and cd.customer_confirmed)
+            customer_id = si_data.customer if si_data else None
+            customer_crate_balance = flt(
+                frappe.db.get_value("Customer", customer_id, "custom_current_crate_balance")
+            ) if customer_id else 0
             rows.append({
                 "row_type": "invoice",
                 "sales_invoice": row.sales_invoice,
                 "stock_entry": None,
-                "customer": customer,
+                "customer": customer_id,
+                "customer_name": si_data.customer_name if si_data else None,
+                "customer_crate_balance": customer_crate_balance,
                 "total_crate_out": flt(row.total_crate_out),
                 "crate_delivery": cd.name if cd else None,
                 "crates_delivered": flt(cd.crates_delivered) if cd else None,
                 "crates_returned": flt(cd.crates_returned) if cd else None,
-                "customer_confirmed": cd.customer_confirmed if cd else 0,
-                "delivery_done": bool(cd)
+                "customer_confirmed": 1 if otp_confirmed else 0,
+                # delivery_done = True only when customer has confirmed via OTP
+                "delivery_done": otp_confirmed,
+                # delivery_recorded = True once crate numbers have been entered
+                "delivery_recorded": bool(cd),
+                # otp_pending = CD exists but OTP not yet confirmed
+                "otp_pending": bool(cd and not otp_confirmed),
             })
         elif row.stock_entry:
             try:
@@ -858,7 +884,7 @@ def get_driver_profile():
         "expiry_date": str(d.expiry_date) if d.expiry_date else None,
         "crate_balance": flt(d.custom_invoice_crate_balance),
         "email": user,
-        "image": user_doc.user_image if user_doc else None
+        "image": user_doc.user_image if user_doc else None,
     }
 
 
@@ -900,9 +926,21 @@ def create_crate_delivery(vml, sales_invoice=None, stock_entry=None, crates_deli
         existing = frappe.db.get_value("Crate Delivery", {"sales_invoice": sales_invoice, "docstatus": 1}, "name")
         if existing:
             frappe.throw(f"A Crate Delivery ({existing}) already exists for this invoice.")
-        draft = frappe.db.get_value("Crate Delivery", {"sales_invoice": sales_invoice, "docstatus": 0}, "name")
+        # Draft exists → return it so driver can re-open the OTP screen
+        draft = frappe.db.get_value(
+            "Crate Delivery",
+            {"sales_invoice": sales_invoice, "docstatus": 0},
+            ["name", "crates_delivered", "crates_returned", "actual_customer"],
+            as_dict=True
+        )
         if draft:
-            frappe.throw(f"A draft Crate Delivery ({draft}) already exists for this invoice.")
+            return {
+                "status": "success",
+                "crate_delivery": draft.name,
+                "crates_delivered": flt(draft.crates_delivered),
+                "crates_returned": flt(draft.crates_returned),
+                "customer": draft.actual_customer
+            }
     else:
         existing = frappe.db.get_value("Crate Delivery", {"stock_entry": stock_entry, "docstatus": 1}, "name")
         if existing:
@@ -920,7 +958,11 @@ def create_crate_delivery(vml, sales_invoice=None, stock_entry=None, crates_deli
     cd.crates_delivered = flt(crates_delivered)
     cd.crates_returned = flt(crates_returned)
     cd.insert(ignore_permissions=True)
-    cd.submit()
+
+    # Stock entries have no customer to confirm; submit immediately.
+    # Invoice deliveries stay as draft until customer OTP is verified.
+    if stock_entry:
+        cd.submit()
 
     return {
         "status": "success",
@@ -989,7 +1031,6 @@ def get_dispatch_driver_balances():
 
 @frappe.whitelist()
 def get_customer_crate_balance():
-    _require("customer")
     customer_id = get_logged_in_customer()
 
     balance = flt(frappe.db.get_value("Customer", customer_id, "custom_current_crate_balance"))
@@ -998,7 +1039,6 @@ def get_customer_crate_balance():
 
 @frappe.whitelist()
 def get_customer_crate_ledger(filter_type="Last 7 Days", start_date=None, end_date=None):
-    _require("customer")
     customer_id = get_logged_in_customer()
     from_date, to_date = get_date_range(filter_type, start_date, end_date)
 
@@ -1008,8 +1048,9 @@ def get_customer_crate_ledger(filter_type="Last 7 Days", start_date=None, end_da
             "customer": customer_id,
             "posting_date": ["between", [from_date, to_date]]
         },
-        fields=["name", "posting_date", "entry_type", "crates_out", "crates_in",
-                "balance_crates", "sales_invoice", "crate_delivery"],
+        fields=["name", "posting_date", "entry_type", "crate_category",
+                "crates_out", "crates_in", "balance_crates",
+                "sales_invoice", "vehicle_movement_log", "crate_delivery"],
         order_by="posting_date desc, creation desc"
     )
 

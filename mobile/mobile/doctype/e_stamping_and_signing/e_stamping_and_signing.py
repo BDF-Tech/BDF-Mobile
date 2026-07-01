@@ -13,12 +13,12 @@ def get_melento_secrets():
         "stamping": {
             "api_key": doc.get_password("stamping_api_key"),
             "application_id": doc.get_password("stamping_application_id"),
-            "url": "https://in-stamp.staging-signdesk.com/api/v2/estamp/requestStampPaper"
+            "url": "https://in-stamp.signdesk.com/api/v2/estamp/requestStampPaper"
         },
         "esign": {
             "api_key": doc.get_password("signing_api_key"),
             "application_id": doc.get_password("signing_application_id"),
-            "url": "https://uat.signdesk.in/api/sandbox/signRequest"
+            "url": "https://api.signdesk.in/api/live/signRequest"
         }
     }
 
