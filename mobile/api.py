@@ -340,6 +340,7 @@ def get_order_details(order_id):
             "item_code": item.item_code,
             "item_name": item.item_name,
             "qty": item.qty,
+            "uom": item.uom,
             "rate": item.rate,
             "amount": item.amount,
             "image": frappe.db.get_value("Item", item.item_code, "image")
@@ -415,8 +416,10 @@ def get_invoice_details(invoice_id=None):
                 "item_code": item.item_code,
                 "item_name": item.item_name,
                 "qty": float(item.qty or 0),
+                "uom": item.uom,
                 "rate": float(item.rate or 0),
-                "amount": float(item.amount or 0)
+                "amount": float(item.amount or 0),
+                "image": frappe.db.get_value("Item", item.item_code, "image")
             }
             for item in doc.items
         ]
@@ -1071,6 +1074,51 @@ def get_customer_crate_ledger(filter_type="Last 7 Days", start_date=None, end_da
         order_by="creation desc",
         ignore_permissions=True
     )
+
+
+@frappe.whitelist()
+def get_driver_crate_ledger(filter_type="Last 30 Days", start_date=None, end_date=None):
+    """
+    Full crate chain from the driver's perspective:
+      - Assigned from plant   (ledger_type=Driver, OUT)
+      - Given to customer     (ledger_type=Customer, OUT, driver set)
+      - Returned by customer  (ledger_type=Customer, IN,  driver set)
+    """
+    _require("driver")
+    driver = get_logged_in_driver()
+    from_date, to_date = get_date_range(filter_type, start_date, end_date)
+
+    rows = frappe.get_all(
+        "Customer Crate Ledger",
+        filters={
+            "driver": driver,
+            "posting_date": ["between", [from_date, to_date]]
+        },
+        fields=["name", "posting_date", "creation", "ledger_type", "entry_type",
+                "crate_category", "crates_out", "crates_in", "balance_crates",
+                "crate_type", "customer", "sales_invoice", "vehicle_movement_log",
+                "crate_delivery"],
+        order_by="creation desc",
+        ignore_permissions=True
+    )
+
+    # Resolve customer names for display
+    customer_names = {}
+    for r in rows:
+        cust = r.get("customer")
+        if cust and cust not in customer_names:
+            customer_names[cust] = frappe.db.get_value("Customer", cust, "customer_name") or cust
+        r["customer_name"] = customer_names.get(cust)
+
+        # Classify the movement for the app
+        if r.get("ledger_type") == "Driver":
+            r["movement"] = "assigned"       # plant -> driver
+        elif r.get("entry_type") == "OUT":
+            r["movement"] = "to_customer"    # driver -> customer
+        else:
+            r["movement"] = "from_customer"  # customer -> driver
+
+    return rows
 
 
 @frappe.whitelist(allow_guest=True)
