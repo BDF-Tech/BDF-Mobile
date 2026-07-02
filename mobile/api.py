@@ -911,12 +911,17 @@ def get_driver_pending_deliveries(vml=None):
 # =========================================================
 
 @frappe.whitelist()
-def create_crate_delivery(vml, sales_invoice=None, stock_entry=None, crates_delivered=0, crates_returned=0):
+def create_crate_delivery(vml, sales_invoice=None, stock_entry=None, crates_delivered=0, crates_returned=0,
+                          latitude=None, longitude=None):
     _require("driver")
     driver = get_logged_in_driver()
 
     if not sales_invoice and not stock_entry:
         frappe.throw("Either sales_invoice or stock_entry is required.")
+
+    # GPS is required for mobile deliveries
+    if latitude in (None, "", 0, "0") or longitude in (None, "", 0, "0"):
+        frappe.throw("Location (GPS) is required to record a crate delivery. Please enable location and try again.")
 
     vml_state = frappe.db.get_value("Vehicle Movement Log", vml, "workflow_state")
     if vml_state != "Submitted":
@@ -934,6 +939,13 @@ def create_crate_delivery(vml, sales_invoice=None, stock_entry=None, crates_deli
             as_dict=True
         )
         if draft:
+            # Refresh the captured GPS on the existing draft
+            frappe.db.set_value("Crate Delivery", draft.name, {
+                "location_source": "Mobile GPS",
+                "delivery_latitude": flt(latitude),
+                "delivery_longitude": flt(longitude),
+                "location_captured_at": now_datetime(),
+            })
             return {
                 "status": "success",
                 "crate_delivery": draft.name,
@@ -957,6 +969,10 @@ def create_crate_delivery(vml, sales_invoice=None, stock_entry=None, crates_deli
         cd.stock_entry = stock_entry
     cd.crates_delivered = flt(crates_delivered)
     cd.crates_returned = flt(crates_returned)
+    cd.location_source = "Mobile GPS"
+    cd.delivery_latitude = flt(latitude)
+    cd.delivery_longitude = flt(longitude)
+    cd.location_captured_at = now_datetime()
     cd.insert(ignore_permissions=True)
 
     # Stock entries have no customer to confirm; submit immediately.
@@ -1042,16 +1058,18 @@ def get_customer_crate_ledger(filter_type="Last 7 Days", start_date=None, end_da
     customer_id = get_logged_in_customer()
     from_date, to_date = get_date_range(filter_type, start_date, end_date)
 
-    return frappe.db.get_list(
+    return frappe.get_all(
         "Customer Crate Ledger",
         filters={
             "customer": customer_id,
             "posting_date": ["between", [from_date, to_date]]
         },
-        fields=["name", "posting_date", "entry_type", "crate_category",
-                "crates_out", "crates_in", "balance_crates",
-                "sales_invoice", "vehicle_movement_log", "crate_delivery"],
-        order_by="posting_date desc, creation desc"
+        fields=["name", "posting_date", "creation", "entry_type", "crate_category",
+                "crates_out", "crates_in", "balance_crates", "crate_type",
+                "sales_invoice", "vehicle_movement_log", "crate_delivery",
+                "crate_balance_adjustment"],
+        order_by="creation desc",
+        ignore_permissions=True
     )
 
 
