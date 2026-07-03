@@ -742,7 +742,12 @@ def get_driver_vmls(date=None):
     _require("driver")
     driver = get_logged_in_driver()
 
-    filters = {"driver": driver, "workflow_state": "Dispatch Loading"}
+    # Active trips the driver acts on: still loading OR dispatched (crate
+    # delivery is created once the trip is Submitted).
+    filters = {
+        "driver": driver,
+        "workflow_state": ["in", ["Dispatch Loading", "Submitted"]],
+    }
     if date:
         filters["date_and_time"] = ["between", [f"{date} 00:00:00", f"{date} 23:59:59"]]
 
