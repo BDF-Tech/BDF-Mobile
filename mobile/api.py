@@ -832,11 +832,31 @@ def get_driver_vml_details(vml):
                 )
             except Exception:
                 se_cd = None
+
+            # Target (transit) warehouse of the stock entry, and the warehouse
+            # it is mapped to in Crate Settings → Transit → Warehouse Mapping.
+            target_warehouse = frappe.db.get_value(
+                "Stock Entry", row.stock_entry, "to_warehouse"
+            )
+            if not target_warehouse:
+                target_warehouse = frappe.db.get_value(
+                    "Stock Entry Detail",
+                    {"parent": row.stock_entry, "t_warehouse": ["is", "set"]},
+                    "t_warehouse"
+                )
+            mapped_warehouse = frappe.db.get_value(
+                "Crate Transit Warehouse Map",
+                {"parenttype": "Crate Settings", "transit_warehouse": target_warehouse},
+                "warehouse"
+            ) if target_warehouse else None
+
             rows.append({
                 "row_type": "stock_entry",
                 "sales_invoice": None,
                 "stock_entry": row.stock_entry,
                 "customer": None,
+                "target_warehouse": target_warehouse,
+                "mapped_warehouse": mapped_warehouse,
                 "total_crate_out": flt(row.total_crate_out),
                 "crate_delivery": se_cd.name if se_cd else None,
                 "crates_delivered": flt(se_cd.crates_delivered) if se_cd else None,
