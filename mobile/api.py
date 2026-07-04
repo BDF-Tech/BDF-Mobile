@@ -943,7 +943,8 @@ def create_crate_delivery(vml, sales_invoice=None, stock_entry=None, crates_deli
         draft = frappe.db.get_value(
             "Crate Delivery",
             {"sales_invoice": sales_invoice, "docstatus": 0},
-            ["name", "crates_delivered", "crates_returned", "actual_customer"],
+            ["name", "crates_delivered", "crates_returned", "actual_customer",
+             "customer_phone", "otp_phone_override"],
             as_dict=True
         )
         if draft:
@@ -959,6 +960,7 @@ def create_crate_delivery(vml, sales_invoice=None, stock_entry=None, crates_deli
                 "crate_delivery": draft.name,
                 "crates_delivered": flt(draft.crates_delivered),
                 "crates_returned": flt(draft.crates_returned),
+                "customer_phone": draft.otp_phone_override or draft.customer_phone,
                 "customer": draft.actual_customer
             }
     else:
@@ -993,6 +995,7 @@ def create_crate_delivery(vml, sales_invoice=None, stock_entry=None, crates_deli
         "crate_delivery": cd.name,
         "crates_delivered": cd.crates_delivered,
         "crates_returned": cd.crates_returned,
+        "customer_phone": (cd.otp_phone_override or cd.customer_phone) if sales_invoice else None,
         "customer": cd.actual_customer if sales_invoice else None
     }
 
