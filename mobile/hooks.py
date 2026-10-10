@@ -185,3 +185,10 @@ app_license = "MIT"
 # auth_hooks = [
 #	"mobile.auth.validate"
 # ]
+scheduler_events = {
+    "cron": {
+        "* * * * *": [
+            "mobile.mobile.doctype.scale_device.scale_device.execute_dynamic_cleanup"
+        ]
+    }
+}

@@ -1,0 +1,338 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "format:VL-{YYYY}-{MM}-{####}",
+ "creation": "2023-05-13 16:02:19.102163",
+ "default_view": "List",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "type",
+  "vehicle",
+  "supplier",
+  "remark",
+  "entry_date",
+  "column_break_0kp7z",
+  "model",
+  "fuel_type",
+  "make",
+  "route_cost_center",
+  "refuel_details_section",
+  "supplier_name",
+  "invoice_reference",
+  "column_break_8nz3q",
+  "fuel_qty",
+  "fuel_price",
+  "total_fuel_amount",
+  "purchase_invoice",
+  "reading_details_section",
+  "date",
+  "column_break_fciih",
+  "last_odometer_reading",
+  "distance_travelled",
+  "column_break_xzjab",
+  "current_odometer_reading",
+  "mileage",
+  "service_details_section",
+  "service_items",
+  "total_amount",
+  "spare_parts",
+  "service_kilometer",
+  "amended_from",
+  "invoice_details_section",
+  "invoices",
+  "test"
+ ],
+ "fields": [
+  {
+   "fieldname": "type",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Type",
+   "options": "Fuel Refill\nService",
+   "reqd": 1
+  },
+  {
+   "fieldname": "vehicle",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Vehicle",
+   "options": "Vehicle",
+   "reqd": 1
+  },
+  {
+   "fieldname": "supplier",
+   "fieldtype": "Link",
+   "label": "Supplier",
+   "mandatory_depends_on": "eval:doc.type==\"Fuel Refill\"",
+   "options": "Supplier"
+  },
+  {
+   "fieldname": "remark",
+   "fieldtype": "Data",
+   "label": "Remark"
+  },
+  {
+   "fieldname": "entry_date",
+   "fieldtype": "Date",
+   "label": "Entry Date",
+   "reqd": 1
+  },
+  {
+   "fieldname": "column_break_0kp7z",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fetch_from": "vehicle.model",
+   "fieldname": "model",
+   "fieldtype": "Data",
+   "label": "Model",
+   "read_only": 1
+  },
+  {
+   "fetch_from": "vehicle.fuel_type",
+   "fieldname": "fuel_type",
+   "fieldtype": "Data",
+   "label": "Fuel Type",
+   "read_only": 1
+  },
+  {
+   "fetch_from": "vehicle.make",
+   "fieldname": "make",
+   "fieldtype": "Data",
+   "label": "Make",
+   "read_only": 1
+  },
+  {
+   "fieldname": "route_cost_center",
+   "fieldtype": "Link",
+   "label": "Route (Cost Center)",
+   "options": "Cost Center",
+   "reqd": 1
+  },
+  {
+   "depends_on": "eval:doc.type==\"Fuel Refill\"",
+   "fieldname": "refuel_details_section",
+   "fieldtype": "Section Break",
+   "label": "Refuel Details"
+  },
+  {
+   "fetch_from": "supplier.supplier_name",
+   "fieldname": "supplier_name",
+   "fieldtype": "Data",
+   "label": "Supplier Name",
+   "read_only": 1
+  },
+  {
+   "depends_on": "eval:doc.type==\"Fuel Refill\"",
+   "fieldname": "invoice_reference",
+   "fieldtype": "Data",
+   "label": "Invoice Reference",
+   "mandatory_depends_on": "eval:doc.type==\"Fuel Refill\""
+  },
+  {
+   "fieldname": "column_break_8nz3q",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "fuel_qty",
+   "fieldtype": "Float",
+   "label": "Fuel Qty",
+   "mandatory_depends_on": "eval:doc.type==\"Fuel Refill\""
+  },
+  {
+   "fieldname": "fuel_price",
+   "fieldtype": "Currency",
+   "label": "Fuel Price",
+   "mandatory_depends_on": "eval:doc.type==\"Fuel Refill\""
+  },
+  {
+   "depends_on": "eval:doc.type==\"Fuel Refill\"",
+   "fieldname": "total_fuel_amount",
+   "fieldtype": "Currency",
+   "label": "Total Fuel Amount",
+   "read_only": 1
+  },
+  {
+   "fieldname": "purchase_invoice",
+   "fieldtype": "Link",
+   "label": "Purchase Invoice",
+   "options": "Purchase Invoice"
+  },
+  {
+   "depends_on": "eval:doc.type==\"Fuel Refill\"",
+   "fieldname": "reading_details_section",
+   "fieldtype": "Section Break",
+   "label": "Reading Details"
+  },
+  {
+   "default": "Today",
+   "fieldname": "date",
+   "fieldtype": "Date",
+   "label": "Date",
+   "mandatory_depends_on": "eval:doc.type==\"Fuel Refill\""
+  },
+  {
+   "fieldname": "column_break_fciih",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "last_odometer_reading",
+   "fieldtype": "Int",
+   "label": "Last Odometer Reading",
+   "mandatory_depends_on": "eval:doc.type==\"Fuel Refill\"",
+   "non_negative": 1
+  },
+  {
+   "fieldname": "distance_travelled",
+   "fieldtype": "Int",
+   "label": "Distance Travelled",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_xzjab",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "current_odometer_reading",
+   "fieldtype": "Int",
+   "label": "Current Odometer Reading",
+   "mandatory_depends_on": "eval:doc.type==\"Fuel Refill\""
+  },
+  {
+   "fieldname": "mileage",
+   "fieldtype": "Float",
+   "label": "Mileage",
+   "read_only": 1
+  },
+  {
+   "depends_on": "eval:doc.type==\"Service\"",
+   "fieldname": "service_details_section",
+   "fieldtype": "Section Break",
+   "label": "Service Details"
+  },
+  {
+   "fieldname": "service_items",
+   "fieldtype": "Table",
+   "label": "Service Items",
+   "mandatory_depends_on": "eval:doc.type==\"Service\"",
+   "options": "BDF Vehicle Service"
+  },
+  {
+   "fieldname": "total_amount",
+   "fieldtype": "Currency",
+   "label": "Total Amount",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "depends_on": "eval:doc.type==\"Service\"",
+   "fieldname": "spare_parts",
+   "fieldtype": "Check",
+   "label": "Spare Parts"
+  },
+  {
+   "depends_on": "eval:doc.type==\"Service\" && doc.spare_parts == false",
+   "fieldname": "service_kilometer",
+   "fieldtype": "Int",
+   "label": "Service Kilometer",
+   "mandatory_depends_on": "eval:doc.type==\"Service\" && doc.spare_parts == false",
+   "non_negative": 1
+  },
+  {
+   "fieldname": "amended_from",
+   "fieldtype": "Link",
+   "label": "Amended From",
+   "no_copy": 1,
+   "options": "BDF Vehicle Log",
+   "print_hide": 1,
+   "read_only": 1
+  },
+  {
+   "depends_on": "eval:doc.type==\"Service\"",
+   "fieldname": "invoice_details_section",
+   "fieldtype": "Section Break",
+   "label": "Invoice Details"
+  },
+  {
+   "fieldname": "invoices",
+   "fieldtype": "Table",
+   "label": "Invoices",
+   "options": "BDF Vehicle Service PI",
+   "read_only": 1
+  },
+  {
+   "fieldname": "test",
+   "fieldtype": "Data",
+   "label": "Test"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "is_submittable": 1,
+ "links": [],
+ "modified": "2026-05-25 09:22:52.847296",
+ "modified_by": "Administrator",
+ "module": "Mobile",
+ "name": "BDF Vehicle Log",
+ "naming_rule": "Expression",
+ "owner": "it@bastardairyfarm.com",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "submit": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "BDF Vehicle Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Accounts Manager",
+   "share": 1,
+   "submit": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "BDF Diesel Entry",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1,
+ "track_views": 1
+}

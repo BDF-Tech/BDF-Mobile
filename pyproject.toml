@@ -1,12 +1,20 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "mobile"
 version = "0.0.1"
 description = "Mobile"
 authors = [
-  { name = "Quantbit", email = "pradip.jadhav@erpdata.in" }
+  { name = "Qunatbit", email = "pradip.jadhav@erpdata.in" }
 ]
 requires-python = ">=3.10"
+readme = "README.md"
 dependencies = []
+
+[tool.setuptools.packages.find]
+include = ["mobile*"]
 
 [tool.frappe]
 app_name = "mobile"
