@@ -1905,10 +1905,11 @@ def get_admin_overview():
     company = _default_company()
     co = {"company": company} if company else {}
 
-    def sales_orders():
-        r = frappe.get_list("Sales Order", filters=dict(co, docstatus=1, transaction_date=day),
+    def sales_returns():
+        # credit notes (Sales Invoice with is_return=1) submitted today; their totals are negative, shown as a positive value
+        r = frappe.get_list("Sales Invoice", filters=dict(co, docstatus=1, posting_date=day, is_return=1),
                             fields=["count(name) as n", "sum(base_grand_total) as total"], limit_page_length=1)[0]
-        return {"count": int(r.n or 0), "total": flt(r.total)}
+        return {"count": int(r.n or 0), "total": abs(flt(r.total))}
 
     def sales_invoices():
         r = frappe.get_list("Sales Invoice", filters=dict(co, docstatus=1, posting_date=day, is_return=0),
@@ -1935,7 +1936,7 @@ def get_admin_overview():
     return {
         "date": day,
         "company": company,
-        "sales_orders": _admin_block(sales_orders),
+        "sales_returns": _admin_block(sales_returns),
         "sales_invoices": _admin_block(sales_invoices),
         "attendance": _admin_block(attendance),
         "complaints": _admin_block(complaints),
