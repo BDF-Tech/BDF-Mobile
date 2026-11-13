@@ -724,6 +724,8 @@ def fetch_customer_catalog(customer_id):
 # =========================================================
 
 MASTER_DEPARTMENTS = {"it", "md"}
+SECURITY_ROLES = {"Security Read Only", "Security Entry"}
+
 DEPARTMENT_MAP = {
     "driver":     "driver",
     "dispatch":   "dispatch",
@@ -742,20 +744,62 @@ def _get_department(email):
         return None
 
 
-def _is_master(user=None):
+# Which app home screen(s) a user gets = which "App ..." roles they have. The roles are given to users
+# in the ERP (User > Roles); this table only says which screen each role opens.
+APP_DASHBOARD_ROLES = {
+    "App Admin": "master",
+    "App Customer": "customer",
+    "App Driver": "driver",
+    "App Dispatch": "dispatch",
+    "App Production": "production",
+    "App Security": "security",
+    "App Employee": "employee",
+}
+APP_DASHBOARD_LABELS = {
+    "master": "System Admin", "customer": "Customer", "driver": "Driver", "dispatch": "Dispatch",
+    "production": "Production", "security": "Security", "employee": "Employee",
+}
+
+
+def _legacy_dashboard(user):
+    """OLD email rule (sanskar.driver@ -> driver ...). Used ONLY for users who have no "App ..." role yet,
+    so nobody is locked out during the switch. Remove once every app user has an App role."""
+    user_type = DEPARTMENT_MAP.get(_get_department(user), "customer")
+    if user_type == "customer" and SECURITY_ROLES.intersection(frappe.get_roles(user)):
+        user_type = "security"
+    if user_type == "customer":
+        try:
+            customer_id = get_logged_in_customer()
+        except Exception:
+            customer_id = None
+        if not customer_id and frappe.db.exists("Employee", {"user_id": user, "status": "Active"}):
+            user_type = "employee"
+    return user_type
+
+
+def _app_dashboards(user=None):
+    """(dashboards, from_roles): the user's app screens from their App roles, else the old email rule."""
     user = user or frappe.session.user
-    return _get_department(user) in MASTER_DEPARTMENTS
+    roles = set(frappe.get_roles(user))
+    dashboards = [d for r, d in APP_DASHBOARD_ROLES.items() if r in roles]
+    if dashboards:
+        return dashboards, True
+    return [_legacy_dashboard(user)], False
+
+
+def _is_master(user=None):
+    return "master" in _app_dashboards(user)[0]
 
 
 def _require(*departments):
-    """Allow if user's email department matches, or user is IT/MD (master)."""
+    """Allow if the user's app dashboards (from App roles; old email rule as fallback) include one of these,
+    or the user is System Admin."""
     if frappe.session.user == "Guest":
         frappe.throw("Please login first", frappe.PermissionError)
-    if _is_master():
+    dashboards = _app_dashboards()[0]
+    if "master" in dashboards or set(departments) & set(dashboards):
         return
-    dept = _get_department(frappe.session.user)
-    if dept not in departments:
-        frappe.throw("You don't have permission to access this.", frappe.PermissionError)
+    frappe.throw("You don't have permission to access this.", frappe.PermissionError)
 
 
 def get_logged_in_driver():
@@ -774,41 +818,46 @@ def get_logged_in_driver():
 
 @frappe.whitelist()
 def get_user_info():
+    """Which home screen(s) to open. `user_type` = the first one (kept for older app versions);
+    `dashboards` = all of them: more than one -> the app shows a "Choose dashboard" screen."""
     user = frappe.session.user
     if user == "Guest":
         frappe.throw("Please login first", frappe.PermissionError)
 
     full_name = frappe.utils.get_fullname(user)
-    dept = _get_department(user)
-    user_type = DEPARTMENT_MAP.get(dept, "customer")
+    dashboards, from_roles = _app_dashboards(user)
+    out = {
+        "user_type": dashboards[0],
+        "dashboards": [{"type": d, "label": APP_DASHBOARD_LABELS.get(d, d.title())} for d in dashboards],
+        "from_roles": from_roles,
+        "full_name": full_name,
+        "email": user,
+    }
 
-    if user_type == "master":
-        return {"user_type": "master", "full_name": full_name, "email": user}
-
-    if user_type == "driver":
+    if "driver" in dashboards:
         driver = frappe.db.get_value("Driver", {"custom_user": user}, ["name", "full_name"], as_dict=True)
-        return {
-            "user_type": "driver",
-            "full_name": full_name,
-            "email": user,
-            "driver_id": driver.name if driver else None,
-            "driver_name": driver.full_name if driver else full_name
-        }
+        out["driver_id"] = driver.name if driver else None
+        out["driver_name"] = driver.full_name if driver else full_name
 
-    if user_type == "dispatch":
-        return {"user_type": "dispatch", "full_name": full_name, "email": user}
-
-    if user_type == "production":
-        return {"user_type": "production", "full_name": full_name, "email": user}
-
-    if user_type == "customer":
+    if "customer" in dashboards:
         try:
-            customer_id = get_logged_in_customer()
+            out["customer_id"] = get_logged_in_customer()
         except Exception:
-            customer_id = None
-        return {"user_type": "customer", "full_name": full_name, "email": user, "customer_id": customer_id}
+            out["customer_id"] = None
 
-    return {"user_type": "unknown", "full_name": full_name, "email": user}
+    if "employee" in dashboards:
+        employee = frappe.db.get_value("Employee", {"user_id": user, "status": "Active"},
+                                       ["name", "employee_name", "department", "designation"], as_dict=True)
+        if employee:
+            out.update({
+                "employee_id": employee.name,
+                "department": employee.department,
+                "designation": employee.designation,
+            })
+            if dashboards[0] == "employee":
+                out["full_name"] = employee.employee_name or full_name
+
+    return out
 
 
 # =========================================================
@@ -846,8 +895,8 @@ def get_driver_vml_details(vml):
 
     doc = frappe.get_doc("Vehicle Movement Log", vml)
 
-    # Drivers can only view their own VML
-    if _get_department(frappe.session.user) == "driver" and not _is_master():
+    # Drivers can only view their own VML (dispatch and System Admin see all)
+    if not ({"dispatch", "master"} & set(_app_dashboards()[0])):
         driver = get_logged_in_driver()
         if doc.driver != driver:
             frappe.throw("You are not assigned to this VML", frappe.PermissionError)
@@ -1298,3 +1347,673 @@ def fetch_template_items(template_name):
     doc.save(ignore_permissions=True)
 
     return f"{added_count} rows added. Default UOM auto-selected."
+
+
+def _default_company():
+    return (
+        frappe.defaults.get_user_default("Company")
+        or frappe.db.get_single_value("Global Defaults", "default_company")
+    )
+
+
+# =========================================================
+# COMPLAINTS & FEEDBACK (Customer Complaint, dairy app)
+# =========================================================
+# Access comes ONLY from roles (Role Permission Manager on Customer Complaint): nothing here bypasses
+# permissions. Remove the role from a user and the app's complaint screens stop working for them.
+# On top of the role, results are narrowed to the caller's own complaints (never widened).
+
+COMPLAINT_DT = "Customer Complaint"
+COMPLAINT_PAGE = 20
+COMPLAINT_MAX_UPLOAD_MB = 10  # one photo
+COMPLAINT_MAX_VIDEO_MB = 20  # one video (the app records max 30 s, low quality)
+COMPLAINT_MAX_PHOTOS = 5
+COMPLAINT_MAX_VIDEOS = 1
+COMPLAINT_MAX_ITEMS = 20
+COMPLAINT_IMAGE_EXT = {"jpg", "jpeg", "png", "webp", "heic"}
+COMPLAINT_VIDEO_EXT = {"mp4", "mov", "3gp"}
+# What the raiser sees: approvals are internal, so they read as "In Progress".
+COMPLAINT_STATUS_LABEL = {
+    "Open": "Registered",
+    "Assigned": "In Progress",
+    "Pending Approval": "In Progress",
+    "Accounts Approval": "In Progress",
+    "Resolved": "Resolved",
+    "Closed": "Closed",
+    "Rejected": "Rejected",
+}
+COMPLAINT_OPEN_STATES = ("Open", "Assigned", "Pending Approval", "Accounts Approval")
+COMPLAINT_CUSTOMER_TYPE = {"Franchise": "Franchise", "Sub Franchise": "Sub-Franchise", "Line Customer": "Line Customer"}
+
+
+def _complaint_identity(as_=None):
+    """Customer (Portal User) or Employee (Employee.user_id). as_ lets IT/MD test either side."""
+    user = frappe.session.user
+    if user == "Guest":
+        frappe.throw("Please login first", frappe.PermissionError)
+    # who-am-I takes 3-4 lookups and never changes mid-session: cache it for 10 minutes
+    key = f"mobile_complaint_identity:{user}"
+    links = frappe.cache.get_value(key, expires=True)
+    if links is None:
+        try:
+            customer = get_logged_in_customer()
+        except Exception:
+            customer = None
+        if customer and frappe.db.get_value("Customer", customer, "disabled"):
+            customer = None  # a disabled customer link must not turn staff into a "customer"
+        employee = frappe.db.get_value("Employee", {"user_id": user, "status": "Active"},
+                                       ["name", "employee_name"], as_dict=True)
+        links = {"customer": customer, "employee": dict(employee) if employee else None}
+        frappe.cache.set_value(key, links, expires_in_sec=600)
+    customer = links["customer"]
+    employee = frappe._dict(links["employee"]) if links["employee"] else None
+    # the app sends as_ from the dashboard it was opened on (Customer dashboard -> Customer, staff dashboards -> Employee)
+    kind = as_ if as_ in ("Customer", "Employee") else ("Customer" if customer else "Employee" if employee else None)
+    if kind == "Customer" and not customer:
+        frappe.throw("Your login is not linked to a customer. Please contact Bastar Dairy.", frappe.PermissionError)
+    if kind == "Employee" and not employee:
+        frappe.throw("Your login is not linked to an employee record. Please contact HR.", frappe.PermissionError)
+    if not kind:
+        frappe.throw("Your login is not linked to a customer or employee. Please contact support.", frappe.PermissionError)
+    return frappe._dict(user=user, kind=kind, customer=customer,
+                        employee=employee.name if employee else None,
+                        employee_name=employee.employee_name if employee else None)
+
+
+def _complaint_need(ptype, doc=None):
+    if not frappe.has_permission(COMPLAINT_DT, ptype, doc=doc):
+        frappe.throw("You don't have access to complaints. Please contact Bastar Dairy.", frappe.PermissionError)
+
+
+def _complaint_own_filters(me):
+    """A customer sees complaints about their customer; staff see the ones they raised."""
+    if me.kind == "Customer":
+        return {"complaint_from": "Customer", "customer_id": me.customer}
+    return {"complaint_from": "Employee", "employee": me.employee}
+
+
+def _complaint_get_own(name, me, fields, ptype="read"):
+    _complaint_need("read")
+    # get_list = the user's permissions apply; the own-filter only narrows it further
+    rows = frappe.get_list(COMPLAINT_DT, filters=dict(_complaint_own_filters(me), name=name), fields=fields, limit_page_length=1)
+    if not rows:
+        frappe.throw("Complaint not found", frappe.DoesNotExistError)
+    if ptype != "read":
+        _complaint_need(ptype, doc=name)
+    return rows[0]
+
+
+def _complaint_options(fieldname):
+    return [o for o in (frappe.get_meta(COMPLAINT_DT).get_field(fieldname).options or "").split("\n") if o]
+
+
+def _complaint_departments():
+    filters = {"is_group": 0, "disabled": 0}
+    company = _default_company()
+    if company:
+        filters["company"] = company
+    return frappe.get_all("Department", filters=filters, pluck="name", order_by="department_name")
+
+
+@frappe.whitelist()
+def get_complaint_options(as_=None):
+    """Everything the 'New complaint' screen needs, in one call."""
+    me = _complaint_identity(as_)
+    _complaint_need("read")
+    out = {
+        "can_create": bool(frappe.has_permission(COMPLAINT_DT, "create")),
+        "who": me.kind,
+        "name": frappe.db.get_value("Customer", me.customer, "customer_name") if me.kind == "Customer" else me.employee_name,
+        "entry_types": _complaint_options("entry_type"),
+        "severities": ["Minor", "Major", "Critical"],
+        "limits": {"photos": COMPLAINT_MAX_PHOTOS, "videos": COMPLAINT_MAX_VIDEOS, "video_mb": COMPLAINT_MAX_VIDEO_MB,
+                   "video_seconds": 30, "items": COMPLAINT_MAX_ITEMS},
+    }
+    if me.kind == "Customer":
+        out["complaint_types"] = _complaint_options("complaint_type")
+        out["preferred_resolutions"] = _complaint_options("preferred_resolution")
+    else:
+        out["internal_types"] = _complaint_options("internal_type")
+        # departments rarely change: cache for an hour instead of querying on every form open
+        out["departments"] = _cached_departments()
+    return out
+
+
+def _cached_departments():
+    key = "mobile_complaint_departments"
+    rows = frappe.cache.get_value(key, expires=True)
+    if rows is None:
+        rows = _complaint_departments()
+        frappe.cache.set_value(key, rows, expires_in_sec=3600)
+    return rows
+
+
+@frappe.whitelist()
+def search_complaint_items(txt=""):
+    """Product picker for the complaint form: item code + name only, 20 at a time."""
+    _complaint_identity()
+    _complaint_need("create")
+    or_filters = None
+    if txt:
+        like = ["like", f"%{txt}%"]
+        or_filters = {"item_name": like, "name": like}
+    return frappe.get_all("Item", filters={"disabled": 0, "is_sales_item": 1, "has_variants": 0},
+                          or_filters=or_filters, fields=["name as item_code", "item_name"],
+                          order_by="item_name", limit_page_length=20)
+
+
+def _complaint_short_address(address_name):
+    if not address_name:
+        return None
+    a = frappe.db.get_value("Address", address_name, ["address_line1", "city"], as_dict=True)
+    return ", ".join(filter(None, [a.address_line1, a.city]))[:140] if a else None
+
+
+@frappe.whitelist(methods=["POST"])
+def create_complaint(data, as_=None):
+    me = _complaint_identity(as_)
+    _complaint_need("create")
+    data = frappe._dict(frappe.parse_json(data) or {})
+    entry_type = data.entry_type if data.entry_type in _complaint_options("entry_type") else "Complaint"
+    is_complaint = entry_type == "Complaint"
+
+    def pick(key, field):
+        return data.get(key) if data.get(key) in _complaint_options(field) else None
+
+    doc = frappe.new_doc(COMPLAINT_DT)
+    doc.update({
+        "entry_type": entry_type,
+        "complaint_from": me.kind,
+        "source": "Mobile App",
+        "date_of_complaint": today(),
+        "description_of_issue": (data.description or "").strip()[:2000] or None,
+        "severity_level": pick("severity", "severity_level") or ("Major" if is_complaint else None),
+    })
+    if entry_type == "Feedback" and data.get("rating") is not None:
+        doc.rating = max(0.0, min(1.0, flt(data.rating) / 5.0))  # app sends 1-5 stars
+
+    if me.kind == "Customer":
+        c = frappe.db.get_value("Customer", me.customer, [
+            "customer_name", "customer_group", "mobile_no", "custom_route_master", "territory", "customer_primary_address",
+        ], as_dict=True)
+        doc.update({
+            "customer_id": me.customer,
+            "name_of_a_customer": c.customer_name,
+            "type_of_customer": COMPLAINT_CUSTOMER_TYPE.get(c.customer_group, "Other"),
+            "route": c.custom_route_master,
+            "contact_no": c.mobile_no or frappe.db.get_value("User", me.user, "mobile_no"),
+            "address": _complaint_short_address(c.customer_primary_address) or c.territory,
+        })
+        if is_complaint:
+            # items: [{item_code, qty, batch_no}]; older app versions send one item_code + batch_no
+            raw = data.get("items") or ([{"item_code": data.item_code, "batch_no": data.batch_no}] if data.item_code else [])
+            items, seen = [], set()
+            for r in raw[:COMPLAINT_MAX_ITEMS]:
+                r = frappe._dict(r or {})
+                if not r.item_code or r.item_code in seen:
+                    continue
+                if not frappe.db.exists("Item", r.item_code):
+                    frappe.throw(f"Product {r.item_code} not found")
+                seen.add(r.item_code)
+                items.append({
+                    "item_code": r.item_code,
+                    "qty": max(flt(r.qty) or 1, 0),
+                    "batch_no": (r.batch_no or "").strip()[:140] or None,
+                })
+            if not items:
+                frappe.throw("Please select the product")
+            complaint_type = pick("complaint_type", "complaint_type")
+            if not complaint_type:
+                frappe.throw("Please select the problem type")
+            doc.set("items", items)  # the doctype copies the first row to item_code / batch
+            doc.update({
+                "complaint_type": complaint_type,
+                "preferred_resolution": pick("preferred_resolution", "preferred_resolution") or "Other",
+                "purchase_date": getdate(data.purchase_date) if data.purchase_date else getdate(today()),
+            })
+    else:
+        doc.update({
+            "employee": me.employee,
+            "confidential": frappe.utils.cint(data.confidential),
+            "against_department": data.against_department
+            if data.against_department and frappe.db.exists("Department", data.against_department) else None,
+        })
+        if is_complaint:
+            internal_type = pick("internal_type", "internal_type")
+            if not internal_type:
+                frappe.throw("Please select the complaint type")
+            doc.internal_type = internal_type
+
+    if not is_complaint and not doc.description_of_issue:
+        frappe.throw(f"Please write your {entry_type.lower()}")
+
+    doc.insert()  # normal permission check: needs Create on Customer Complaint
+    return {"status": "success", "name": doc.name, "status_label": COMPLAINT_STATUS_LABEL.get(doc.status, doc.status)}
+
+
+@frappe.whitelist(methods=["POST"])
+def upload_complaint_file(name, as_=None):
+    """Multipart upload (field 'file') right after creating, one file per call.
+    Up to 5 photos + 1 video. The first photo also goes in 'attachment', the video in 'attachment_video';
+    the rest are normal attachments of the complaint."""
+    me = _complaint_identity(as_)
+    row = _complaint_get_own(name, me, ["name", "status", "owner"], ptype="write")
+    if row.owner != me.user or row.status not in ("Open", "Assigned"):
+        frappe.throw("You can add photos only to a new complaint you raised")
+    f = frappe.request.files.get("file") if frappe.request and frappe.request.files else None
+    if not f or not f.filename:
+        frappe.throw("No file received")
+    ext = f.filename.rsplit(".", 1)[-1].lower() if "." in f.filename else ""
+    if ext not in COMPLAINT_IMAGE_EXT | COMPLAINT_VIDEO_EXT:
+        frappe.throw("Only photos (jpg, png) or videos (mp4) can be attached")
+    is_video = ext in COMPLAINT_VIDEO_EXT
+    max_mb = COMPLAINT_MAX_VIDEO_MB if is_video else COMPLAINT_MAX_UPLOAD_MB
+    limit = max_mb * 1024 * 1024
+    content = f.stream.read(limit + 1)
+    if len(content) > limit:
+        frappe.throw(f"{'Video' if is_video else 'Photo'} is larger than {max_mb} MB")
+    have = _complaint_media_counts([name]).get(name, {"photos": 0, "videos": 0})
+    if is_video and have["videos"] >= COMPLAINT_MAX_VIDEOS:
+        frappe.throw(f"Only {COMPLAINT_MAX_VIDEOS} video can be added")
+    if not is_video and have["photos"] >= COMPLAINT_MAX_PHOTOS:
+        frappe.throw(f"Only {COMPLAINT_MAX_PHOTOS} photos can be added")
+    field = "attachment_video" if is_video else "attachment"
+    first = (have["videos"] if is_video else have["photos"]) == 0
+    try:
+        file_doc = frappe.get_doc({
+            "doctype": "File", "file_name": f.filename, "attached_to_doctype": COMPLAINT_DT,
+            "attached_to_name": name, "attached_to_field": field if first else None, "is_private": 1, "content": content,
+        }).insert()  # Frappe checks Write on the complaint it is attached to
+    except Exception:
+        # e.g. a corrupt photo (Frappe opens images to strip EXIF / location data)
+        frappe.log_error("Complaint upload failed", reference_doctype=COMPLAINT_DT, reference_name=name)
+        frappe.throw("This file could not be read. Please take the photo again.")
+    if first:
+        frappe.get_doc(COMPLAINT_DT, name).db_set(field, file_doc.file_url, update_modified=False)
+    return {"status": "success", "field": field if first else None}
+
+
+def _complaint_media_counts(names):
+    """{complaint: {photos, videos}} from the files attached to these complaints (names already permission-checked)."""
+    out = {n: {"photos": 0, "videos": 0} for n in names}
+    if not names:
+        return out
+    rows = frappe.get_all("File", filters={"attached_to_doctype": COMPLAINT_DT, "attached_to_name": ["in", names]},
+                          fields=["attached_to_name", "file_name"])
+    for r in rows:
+        ext = (r.file_name or "").rsplit(".", 1)[-1].lower()
+        if ext in COMPLAINT_VIDEO_EXT:
+            out[r.attached_to_name]["videos"] += 1
+        elif ext in COMPLAINT_IMAGE_EXT:
+            out[r.attached_to_name]["photos"] += 1
+    return out
+
+
+def _complaint_items(names):
+    """{complaint: [{item_code, item_name, qty, batch_no}]} read through the complaint's own permissions."""
+    out = {n: [] for n in names}
+    if not names:
+        return out
+    rows = frappe.get_list(COMPLAINT_DT, filters={"name": ["in", names]}, fields=[
+        "name", "`tabCustomer Complaint Item`.item_code as item_code", "`tabCustomer Complaint Item`.item_name as item_name",
+        "`tabCustomer Complaint Item`.qty as qty", "`tabCustomer Complaint Item`.batch_no as batch_no",
+        "`tabCustomer Complaint Item`.idx as idx",
+    ], order_by="`tabCustomer Complaint Item`.idx asc", limit_page_length=0)
+    for r in rows:
+        if r.item_code:
+            out[r.name].append({"item_code": r.item_code, "item_name": r.item_name, "qty": flt(r.qty), "batch_no": r.batch_no})
+    return out
+
+
+@frappe.whitelist()
+def get_my_complaints(scope="open", start=0, as_=None):
+    """scope: open | all. 20 per page, newest first."""
+    me = _complaint_identity(as_)
+    _complaint_need("read")
+    filters = _complaint_own_filters(me)
+    if scope == "open":
+        filters["status"] = ["in", COMPLAINT_OPEN_STATES]
+    rows = frappe.get_list(
+        COMPLAINT_DT, filters=filters,
+        fields=["name", "entry_type", "status", "date_of_complaint", "complaint_type", "internal_type", "item_name"],
+        order_by="date_of_complaint desc, creation desc",
+        start=frappe.utils.cint(start), page_length=COMPLAINT_PAGE,
+    )
+    items = _complaint_items([r.name for r in rows]) if me.kind == "Customer" else {}
+    out = []
+    for r in rows:
+        extra = len(items.get(r.name) or []) - 1
+        out.append({
+            "name": r.name,
+            "entry_type": r.entry_type,
+            "title": r.internal_type if me.kind == "Employee" else (r.complaint_type or r.entry_type),
+            "item_name": f"{r.item_name} +{extra} more" if r.item_name and extra > 0 else r.item_name,
+            "status": r.status,
+            "status_label": COMPLAINT_STATUS_LABEL.get(r.status, r.status),
+            "date": str(r.date_of_complaint),
+        })
+    res = {"rows": out, "has_more": len(rows) == COMPLAINT_PAGE}
+    if not frappe.utils.cint(start):
+        # header counts, first page only: one grouped query, same permissions + own-filter
+        by = frappe.get_list(COMPLAINT_DT, filters=_complaint_own_filters(me),
+                             fields=["status", "count(name) as n"], group_by="status", order_by=None)
+        n = {r.status: r.n for r in by}
+        res["counts"] = {
+            "open": sum(n.get(s, 0) for s in COMPLAINT_OPEN_STATES),
+            "resolved": n.get("Resolved", 0) + n.get("Closed", 0),
+            "total": sum(n.values()),
+        }
+    return res
+
+
+@frappe.whitelist()
+def get_my_complaint(name, as_=None):
+    me = _complaint_identity(as_)
+    d = _complaint_get_own(name, me, [
+        "name", "entry_type", "status", "date_of_complaint", "creation", "complaint_type", "internal_type",
+        "item_name", "data_kxgv", "purchase_date", "severity_level", "preferred_resolution", "description_of_issue",
+        "against_department", "confidential", "rating", "attachment", "attachment_video", "assigned_on",
+        "resolved_on", "approved_on", "closed_on", "action_taken", "resolution_type", "approver_remarks",
+        "customer_satisfied", "closing_remarks",
+    ])
+    done = d.status in ("Resolved", "Closed")
+    timeline = [{"label": "Registered", "on": str(d.creation)}]
+    if d.assigned_on:
+        timeline.append({"label": "In Progress", "on": str(d.assigned_on)})
+    if done:
+        timeline.append({"label": "Resolved", "on": str(d.approved_on or d.resolved_on or "")})
+    if d.status == "Closed" and d.closed_on:
+        timeline.append({"label": "Closed", "on": str(d.closed_on)})
+    if d.status == "Rejected":
+        timeline.append({"label": "Rejected", "on": str(d.closed_on or "")})
+    return {
+        "name": d.name, "entry_type": d.entry_type, "status": d.status,
+        "status_label": COMPLAINT_STATUS_LABEL.get(d.status, d.status),
+        "title": d.internal_type if me.kind == "Employee" else (d.complaint_type or d.entry_type),
+        "date": str(d.date_of_complaint), "item_name": d.item_name, "batch_no": d.data_kxgv,
+        "purchase_date": str(d.purchase_date) if d.purchase_date else None, "severity": d.severity_level,
+        "preferred_resolution": d.preferred_resolution, "description": d.description_of_issue,
+        "against_department": d.against_department, "confidential": frappe.utils.cint(d.confidential),
+        "rating": round((d.rating or 0) * 5) if d.entry_type == "Feedback" else None,
+        "has_photo": bool(d.attachment), "has_video": bool(d.attachment_video),
+        "items": _complaint_items([d.name])[d.name] or (
+            [{"item_code": None, "item_name": d.item_name, "qty": None, "batch_no": d.data_kxgv}] if d.item_name else []),
+        "media": _complaint_media_counts([d.name])[d.name],
+        "timeline": timeline,
+        # the fix is shown once approved; internal approval notes never are
+        "action_taken": d.action_taken if done else None,
+        "resolution_type": d.resolution_type if done else None,
+        "rejection_reason": d.approver_remarks if d.status == "Rejected" else None,
+        "customer_satisfied": d.customer_satisfied, "closing_remarks": d.closing_remarks,
+        "can_rate": done and d.entry_type == "Complaint" and not d.customer_satisfied,
+    }
+
+
+@frappe.whitelist(methods=["POST"])
+def rate_complaint_resolution(name, satisfied, remarks=None, as_=None):
+    """Raiser says whether the fix worked. Status/workflow untouched; the team sees it as a comment."""
+    me = _complaint_identity(as_)
+    d = _complaint_get_own(name, me, ["name", "status", "customer_satisfied"], ptype="write")
+    if d.status not in ("Resolved", "Closed") or d.customer_satisfied:
+        frappe.throw("This complaint can't be rated now")
+    ok = str(satisfied).lower() in ("1", "yes", "true")
+    remarks = (remarks or "").strip()[:500] or None
+    values = {"customer_satisfied": "Yes" if ok else "No", "closing_remarks": remarks}
+    if not ok:
+        values["follow_up_required"] = 1
+    doc = frappe.get_doc(COMPLAINT_DT, name)
+    doc.db_set(values)
+    doc.add_comment("Comment", ("Satisfied" if ok else "NOT satisfied") + " (via app)" + (f": {remarks}" if remarks else ""))
+    if not ok and doc.assigned_user:
+        doc.assign_user(doc.assigned_user, f"Customer not satisfied: {doc.title_text()}")
+    from dairy.customer_service.doctype.customer_complaint.customer_complaint import notify_counters
+    notify_counters()
+    return {"status": "success"}
+
+
+# =========================================================
+# EMPLOYEE HOME: TODAY + ATTENDANCE (own records only)
+# =========================================================
+# Access comes from roles + the employee's User Permission on their own Employee record:
+# frappe.get_list only returns what the user may read. A section the user may not read comes back
+# with "access": False so the app can say "ask HR" instead of failing.
+
+ATTENDANCE_STATUSES = ("Present", "Absent", "Half Day", "On Leave", "Work From Home")
+
+
+def _my_employee():
+    user = frappe.session.user
+    if user == "Guest":
+        frappe.throw("Please login first", frappe.PermissionError)
+    emp = frappe.db.get_value("Employee", {"user_id": user, "status": "Active"},
+                              ["name", "employee_name", "default_shift", "company"], as_dict=True)
+    if not emp:
+        frappe.throw("Your login is not linked to an employee record. Please contact HR.", frappe.PermissionError)
+    return emp
+
+
+def _hhmm(seconds):
+    seconds = int(seconds or 0)
+    return f"{seconds // 3600}:{(seconds % 3600) // 60:02d}"
+
+
+@frappe.whitelist()
+def get_my_attendance(month=None):
+    """month = 'YYYY-MM' (default: this month). Returns today's shift + punches and the month's attendance."""
+    from frappe.utils import get_datetime, get_time, now_datetime, getdate as _gd
+    emp = _my_employee()
+    today_d = _gd(today())
+    first = _gd(f"{month}-01") if month else today_d.replace(day=1)
+    last = get_last_day(first)
+
+    # --- today's shift: active Shift Assignment, else the employee's default shift
+    shift_name = None
+    if frappe.has_permission("Shift Assignment", "read"):
+        sa = frappe.get_list("Shift Assignment", filters={
+            "employee": emp.name, "docstatus": 1, "status": "Active", "start_date": ["<=", today_d],
+        }, or_filters=[["end_date", "is", "not set"], ["end_date", ">=", today_d]],
+            fields=["shift_type", "end_date"], order_by="start_date desc", limit_page_length=1)
+        shift_name = sa[0].shift_type if sa else None
+    shift_name = shift_name or emp.default_shift
+    shift = None
+    if shift_name and frappe.has_permission("Shift Type", "read"):
+        st = frappe.get_list("Shift Type", filters={"name": shift_name}, fields=["name", "start_time", "end_time"], limit_page_length=1)
+        if st:
+            shift = {"name": st[0].name, "start": get_time(st[0].start_time).strftime("%H:%M"),
+                     "end": get_time(st[0].end_time).strftime("%H:%M")}
+
+    # --- today's punches
+    can_checkin = bool(frappe.has_permission("Employee Checkin", "read"))
+    punches = []
+    if can_checkin:
+        punches = frappe.get_list("Employee Checkin", filters={
+            "employee": emp.name, "time": ["between", [f"{today_d} 00:00:00", f"{today_d} 23:59:59"]],
+        }, fields=["time", "log_type"], order_by="time asc", limit_page_length=50)
+    first_in = punches[0].time if punches else None
+    last_out = punches[-1].time if len(punches) > 1 else None
+    worked = None
+    if first_in:
+        end = last_out or (now_datetime() if today_d == _gd(today()) else None)
+        if end:
+            worked = _hhmm((get_datetime(end) - get_datetime(first_in)).total_seconds())
+
+    # --- the month's attendance
+    can_att = bool(frappe.has_permission("Attendance", "read"))
+    days, counts, late, early = [], {s: 0 for s in ATTENDANCE_STATUSES}, 0, 0
+    today_status = None
+    if can_att:
+        rows = frappe.get_list("Attendance", filters={
+            "employee": emp.name, "docstatus": 1, "attendance_date": ["between", [first, last]],
+        }, fields=["attendance_date", "status", "in_time", "out_time", "late_entry", "early_exit", "working_hours", "leave_type"],
+            order_by="attendance_date asc", limit_page_length=0)
+        for r in rows:
+            counts[r.status] = counts.get(r.status, 0) + 1
+            late += 1 if r.late_entry else 0
+            early += 1 if r.early_exit else 0
+            if r.attendance_date == today_d:
+                today_status = r.status
+            days.append({
+                "date": str(r.attendance_date), "status": r.status, "late": bool(r.late_entry), "early": bool(r.early_exit),
+                "in": get_time(r.in_time).strftime("%H:%M") if r.in_time else None,
+                "out": get_time(r.out_time).strftime("%H:%M") if r.out_time else None,
+                "hours": round(r.working_hours or 0, 1), "leave_type": r.leave_type,
+            })
+
+    return {
+        "employee": emp.name,
+        "today": {
+            "date": str(today_d),
+            "shift": shift,
+            "access": can_checkin,
+            "first_in": get_datetime(first_in).strftime("%H:%M") if first_in else None,
+            "last_out": get_datetime(last_out).strftime("%H:%M") if last_out else None,
+            "punches": len(punches),
+            "worked": worked,
+            "status": today_status,
+        },
+        "month": {
+            "month": first.strftime("%Y-%m"),
+            "label": first.strftime("%B %Y"),
+            "access": can_att,
+            "counts": counts,
+            "late": late,
+            "early_exit": early,
+            "marked_days": len(days),
+            "days": days,
+        },
+    }
+
+
+# =========================================================
+# SYSTEM ADMIN DASHBOARD: TODAY AT A GLANCE
+# =========================================================
+# Only for users whose App roles include "App Admin". Every block is read with the admin's OWN permissions
+# (frappe.get_list); a block they can't read comes back with "access": False, never bypassed.
+
+def _admin_block(fn):
+    try:
+        return dict(fn(), access=True)
+    except frappe.PermissionError:
+        frappe.clear_last_message()
+        return {"access": False}
+
+
+@frappe.whitelist()
+def get_admin_overview():
+    _require()  # no department passes except System Admin (App Admin role)
+    day = today()
+    company = _default_company()
+    co = {"company": company} if company else {}
+
+    def sales_orders():
+        r = frappe.get_list("Sales Order", filters=dict(co, docstatus=1, transaction_date=day),
+                            fields=["count(name) as n", "sum(base_grand_total) as total"], limit_page_length=1)[0]
+        return {"count": int(r.n or 0), "total": flt(r.total)}
+
+    def sales_invoices():
+        r = frappe.get_list("Sales Invoice", filters=dict(co, docstatus=1, posting_date=day, is_return=0),
+                            fields=["count(name) as n", "sum(base_grand_total) as total"], limit_page_length=1)[0]
+        return {"count": int(r.n or 0), "total": flt(r.total)}
+
+    def attendance():
+        rows = frappe.get_list("Attendance", filters=dict(co, docstatus=1, attendance_date=day),
+                               fields=["status", "count(name) as n"], group_by="status", limit_page_length=0)
+        by = {r.status: int(r.n) for r in rows}
+        return {"present": by.get("Present", 0) + by.get("Work From Home", 0), "absent": by.get("Absent", 0),
+                "half_day": by.get("Half Day", 0), "on_leave": by.get("On Leave", 0), "marked": sum(by.values())}
+
+    def complaints():
+        from dairy.customer_service.doctype.customer_complaint.customer_complaint import get_list_counters
+        c = get_list_counters()
+        out = {k: c.get(k, 0) for k in ("today", "open", "in_process", "approval", "overdue")}
+        # pending (not yet resolved) by who raised it: Customer / Employee / Farmer / Vendor / Other
+        rows = frappe.get_list("Customer Complaint", filters={"status": ["in", ADMIN_PENDING_STATES]},
+                               fields=["complaint_from", "count(name) as n"], group_by="complaint_from", limit_page_length=0)
+        out["by_group"] = {r.complaint_from or "Customer": int(r.n) for r in rows}
+        return out
+
+    return {
+        "date": day,
+        "company": company,
+        "sales_orders": _admin_block(sales_orders),
+        "sales_invoices": _admin_block(sales_invoices),
+        "attendance": _admin_block(attendance),
+        "complaints": _admin_block(complaints),
+    }
+
+
+# ---------------------------------------------------------- System Admin: complaints across all groups
+# Read-only management view; actions (assign, approve, close) stay in the ERP. Admin's own permissions apply.
+ADMIN_PENDING_STATES = ("Open", "Assigned", "Pending Approval", "Accounts Approval")
+ADMIN_COMPLAINT_GROUPS = ("Customer", "Employee", "Farmer", "Vendor", "Other")
+ADMIN_COMPLAINT_FIELDS = [
+    "name", "complaint_from", "entry_type", "raised_by_name", "complaint_type", "internal_type", "issue_type",
+    "status", "severity_level", "date_of_complaint", "due_date", "assigned_user", "department", "item_name",
+    "description_of_issue", "source", "route", "dcs",
+]
+
+
+def _admin_complaint_row(r):
+    today_d = getdate(today())
+    issue = {"Employee": r.internal_type, "Customer": r.complaint_type}.get(r.complaint_from, r.issue_type)
+    pending = r.status in ("Open", "Assigned")
+    return {
+        "name": r.name, "group": r.complaint_from or "Customer", "entry_type": r.entry_type,
+        "raised_by": r.raised_by_name, "issue": issue or r.entry_type, "status": r.status,
+        "severity": r.severity_level, "date": str(r.date_of_complaint) if r.date_of_complaint else None,
+        "due": str(r.due_date) if r.due_date else None,
+        "overdue": bool(pending and r.due_date and getdate(r.due_date) < today_d),
+        "assigned": frappe.utils.get_fullname(r.assigned_user) if r.assigned_user else None,
+        "department": r.department, "item": r.item_name, "source": r.source,
+        "place": r.route or r.dcs,
+        "description": (r.description_of_issue or "")[:160],
+    }
+
+
+@frappe.whitelist()
+def get_admin_complaints(group=None, scope="open", search=None, start=0):
+    """scope: open (not yet resolved) | overdue | all. 20 per page, overdue first then newest."""
+    _require()
+    filters = {}
+    if group in ADMIN_COMPLAINT_GROUPS:
+        filters["complaint_from"] = group
+    if scope == "open":
+        filters["status"] = ["in", ADMIN_PENDING_STATES]
+    elif scope == "overdue":
+        filters["status"] = ["in", ("Open", "Assigned")]
+        filters["due_date"] = ["<", today()]
+    or_filters = None
+    if search:
+        like = ["like", f"%{search.strip()}%"]
+        or_filters = {"name": like, "raised_by_name": like, "complaint_id": like, "item_name": like, "description_of_issue": like}
+    rows = frappe.get_list("Customer Complaint", filters=filters, or_filters=or_filters, fields=ADMIN_COMPLAINT_FIELDS,
+                           order_by="date_of_complaint desc, creation desc", start=frappe.utils.cint(start), page_length=20)
+    return {"rows": [_admin_complaint_row(r) for r in rows], "has_more": len(rows) == 20}
+
+
+@frappe.whitelist()
+def get_admin_complaint(name):
+    _require()
+    rows = frappe.get_list("Customer Complaint", filters={"name": name}, fields=ADMIN_COMPLAINT_FIELDS + [
+        "contact_no", "complaint_id", "supplier_name", "employee_name", "against_department", "confidential",
+        "creation", "assigned_on", "resolved_on", "approved_on", "closed_on", "action_taken", "resolution_type",
+        "root_cause", "approver_remarks", "customer_satisfied", "closing_remarks", "escalated", "resolution_hours",
+    ], limit_page_length=1)
+    if not rows:
+        frappe.throw("Complaint not found", frappe.DoesNotExistError)
+    r = rows[0]
+    out = _admin_complaint_row(r)
+    out["description"] = r.description_of_issue
+    timeline = [{"label": "Registered", "on": str(r.creation)}]
+    for label, field in (("Assigned", "assigned_on"), ("Resolution submitted", "resolved_on"),
+                         ("Approved", "approved_on"), ("Closed", "closed_on")):
+        if r.get(field):
+            timeline.append({"label": label, "on": str(r.get(field))})
+    out.update({
+        "contact": r.contact_no, "complaint_id": r.complaint_id, "confidential": frappe.utils.cint(r.confidential),
+        "against_department": r.against_department, "escalated": frappe.utils.cint(r.escalated),
+        "action_taken": r.action_taken, "resolution_type": r.resolution_type, "root_cause": r.root_cause,
+        "approver_remarks": r.approver_remarks, "customer_satisfied": r.customer_satisfied,
+        "closing_remarks": r.closing_remarks, "resolution_hours": r.resolution_hours, "timeline": timeline,
+    })
+    return out
