@@ -2111,10 +2111,11 @@ def get_admin_overview():
     company = _default_company()
     co = {"company": company} if company else {}
 
-    def sales_orders():
-        r = frappe.get_list("Sales Order", filters=dict(co, docstatus=1, transaction_date=day),
+    def sales_returns():
+        # credit notes (Sales Invoice with is_return=1) submitted today; their totals are negative, shown as a positive value
+        r = frappe.get_list("Sales Invoice", filters=dict(co, docstatus=1, posting_date=day, is_return=1),
                             fields=["count(name) as n", "sum(base_grand_total) as total"], limit_page_length=1)[0]
-        return {"count": int(r.n or 0), "total": flt(r.total)}
+        return {"count": int(r.n or 0), "total": abs(flt(r.total))}
 
     def sales_invoices():
         r = frappe.get_list("Sales Invoice", filters=dict(co, docstatus=1, posting_date=day, is_return=0),
@@ -2141,7 +2142,7 @@ def get_admin_overview():
     return {
         "date": day,
         "company": company,
-        "sales_orders": _admin_block(sales_orders),
+        "sales_returns": _admin_block(sales_returns),
         "sales_invoices": _admin_block(sales_invoices),
         "attendance": _admin_block(attendance),
         "complaints": _admin_block(complaints),
@@ -2223,3 +2224,325 @@ def get_admin_complaint(name):
         "closing_remarks": r.closing_remarks, "resolution_hours": r.resolution_hours, "timeline": timeline,
     })
     return out
+
+
+# =========================================================
+# FRANCHISE POS
+# The franchise bills its own buyers from the app. Logic and data live in the dairy app
+# (dairy/franchise_pos); these endpoints only check who is asking and pass the work on.
+# Access is decided in the ERP: the "Franchise POS" tick on the Customer, plus the role
+# permissions on Franchise Sale / Franchise Day Close / Franchise Stock Ledger.
+# =========================================================
+
+from frappe.utils import cint
+from dairy.franchise_pos import stock as fpos_stock
+
+FPOS_SALE = "Franchise Sale"
+FPOS_CLOSE = "Franchise Day Close"
+FPOS_LEDGER = "Franchise Stock Ledger"
+FPOS_BILL_FORMAT = "Franchise Bill"
+FPOS_PAGE = 20
+
+
+def _fpos_franchise(doctype=FPOS_SALE, ptype="read"):
+    """The franchise (Customer) of the logged-in user, after the access checks."""
+    if frappe.session.user == "Guest":
+        frappe.throw("Please login first", frappe.PermissionError)
+    customer = get_logged_in_customer()
+    if not fpos_stock.is_pos_franchise(customer):
+        frappe.throw("Franchise POS is not switched on for your shop. Please contact Bastar Dairy.", frappe.PermissionError)
+    if not frappe.has_permission(doctype, ptype):
+        frappe.throw("You don't have access to this. Please contact Bastar Dairy.", frappe.PermissionError)
+    return customer
+
+
+def _fpos_json(value):
+    return json.loads(value) if isinstance(value, str) else (value or {})
+
+
+def _fpos_bill_row(r):
+    return {
+        "name": r.name, "posting_date": str(r.posting_date), "posting_time": str(r.posting_time or "")[:5],
+        "buyer_name": r.buyer_name, "buyer_mobile": r.buyer_mobile, "payment_mode": r.payment_mode,
+        "is_return": cint(r.is_return), "return_against": r.return_against,
+        "total_qty": flt(r.total_qty), "grand_total": flt(r.grand_total),
+    }
+
+
+FPOS_BILL_FIELDS = ["name", "posting_date", "posting_time", "buyer_name", "buyer_mobile", "payment_mode",
+                    "is_return", "return_against", "total_qty", "grand_total"]
+
+
+@frappe.whitelist()
+def get_franchise_pos_access():
+    """Should the app show the POS at all? Never throws: the customer dashboard calls it for everyone."""
+    out = {"enabled": False, "can_bill": False, "can_close": False}
+    try:
+        customer = get_logged_in_customer()
+    except Exception:
+        return out
+    if not fpos_stock.is_pos_franchise(customer) or not frappe.has_permission(FPOS_SALE, "read"):
+        return out
+    out.update({
+        "enabled": True,
+        "can_bill": bool(frappe.has_permission(FPOS_SALE, "create") and frappe.has_permission(FPOS_SALE, "submit")),
+        "can_close": bool(frappe.has_permission(FPOS_CLOSE, "create") and frappe.has_permission(FPOS_CLOSE, "submit")),
+        "can_stock": bool(frappe.has_permission(FPOS_LEDGER, "read")),
+    })
+    return out
+
+
+@frappe.whitelist()
+def get_franchise_pos_home():
+    """POS home: today's sales, stock in hand, day-close state, last bills, 7-day sales."""
+    customer = _fpos_franchise()
+    day = today()
+    sales = fpos_stock.day_sales(customer, day)
+    out = {
+        "franchise": customer,
+        "franchise_name": frappe.get_cached_value("Customer", customer, "customer_name"),
+        "date": day,
+        "today": dict(sales),
+        "access": get_franchise_pos_access(),
+    }
+
+    if out["access"]["can_stock"]:
+        balances = {k: v for k, v in fpos_stock.get_balances(customer).items() if v > 0}
+        mrp = fpos_stock.get_mrp(list(balances))
+        out["stock"] = {
+            "items": len(balances),
+            "value": flt(sum(q * mrp.get(c, 0) for c, q in balances.items()), 2),
+        }
+
+    last_close = fpos_stock.last_closed_date(customer)
+    out["day_close"] = {
+        "last_closed": str(last_close) if last_close else None,
+        "today_closed": bool(last_close and last_close >= getdate(day)),
+        # yesterday (or earlier) was never closed
+        "pending": bool(not last_close or last_close < getdate(add_days(day, -1))),
+    }
+
+    # get_list = the user's own permissions apply; the franchise filter only narrows further
+    out["recent"] = [_fpos_bill_row(r) for r in frappe.get_list(
+        FPOS_SALE, filters={"franchise": customer, "docstatus": 1}, fields=FPOS_BILL_FIELDS,
+        order_by="posting_date desc, posting_time desc, creation desc", limit_page_length=5)]
+
+    week = dict(frappe.db.sql(
+        """select posting_date, sum(if(is_return, -1, 1) * grand_total) from `tabFranchise Sale`
+        where franchise = %s and docstatus = 1 and posting_date >= %s group by posting_date""",
+        (customer, add_days(day, -6))))
+    out["week"] = [{"date": str(add_days(day, -i)), "amount": flt(week.get(getdate(add_days(day, -i))))}
+                   for i in range(6, -1, -1)]
+    return out
+
+
+@frappe.whitelist()
+def get_franchise_pos_items():
+    """Every item the franchise has ever received, with MRP and stock in hand. Used by billing and by the stock screen."""
+    customer = _fpos_franchise(FPOS_LEDGER)
+    balances = fpos_stock.get_balances(customer)
+    if not balances:
+        return {"items": [], "stock_value": 0}
+    mrp = fpos_stock.get_mrp(list(balances))
+    info = frappe.get_all("Item", filters={"name": ["in", list(balances)]},
+                          fields=["name", "item_name", "stock_uom", "image", "item_group", "disabled"])
+    items = []
+    for i in info:
+        qty = flt(balances.get(i.name), 3)
+        if i.disabled and qty <= 0:
+            continue
+        rate = flt(mrp.get(i.name))
+        items.append({
+            "item_code": i.name, "item_name": i.item_name, "uom": i.stock_uom, "image": i.image,
+            "item_group": i.item_group, "mrp": rate, "balance": qty, "value": flt(max(qty, 0) * rate, 2),
+        })
+    items.sort(key=lambda x: (x["balance"] <= 0, x["item_name"] or ""))
+    return {
+        "items": items,
+        "stock_value": flt(sum(x["value"] for x in items), 2),
+        "allow_negative_stock": cint(fpos_stock.get_settings().allow_negative_stock),
+    }
+
+
+@frappe.whitelist()
+def get_franchise_item_ledger(item_code, start=0):
+    """Stock movements of one item, newest first."""
+    customer = _fpos_franchise(FPOS_LEDGER)
+    rows = frappe.get_list(
+        FPOS_LEDGER, filters={"franchise": customer, "item_code": item_code},
+        fields=["posting_date", "posting_time", "entry_type", "qty", "uom", "voucher_type", "voucher_no"],
+        order_by="posting_date desc, creation desc", limit_start=cint(start), limit_page_length=FPOS_PAGE + 1)
+    return {
+        "rows": [{
+            "date": str(r.posting_date), "entry_type": r.entry_type, "qty": flt(r.qty), "uom": r.uom,
+            "voucher_type": r.voucher_type, "voucher_no": r.voucher_no,
+        } for r in rows[:FPOS_PAGE]],
+        "has_more": len(rows) > FPOS_PAGE,
+        "balance": flt(fpos_stock.get_balances(customer, items=[item_code]).get(item_code)),
+    }
+
+
+def _fpos_bill(doc):
+    out = _fpos_bill_row(doc)
+    out["franchise_name"] = doc.franchise_name
+    out["items"] = [{"item_code": d.item_code, "item_name": d.item_name, "uom": d.uom, "qty": flt(d.qty),
+                     "rate": flt(d.rate), "amount": flt(d.amount)} for d in doc.items]
+    out["pdf_url"] = ("/api/method/frappe.utils.print_format.download_pdf?doctype=" + frappe.utils.quote(FPOS_SALE)
+                      + "&name=" + frappe.utils.quote(doc.name) + "&format=" + frappe.utils.quote(FPOS_BILL_FORMAT)
+                      + "&no_letterhead=1")
+    return out
+
+
+def _fpos_get_bill(name, customer):
+    rows = frappe.get_list(FPOS_SALE, filters={"name": name, "franchise": customer, "docstatus": 1},
+                           fields=["name"], limit_page_length=1)
+    if not rows:
+        frappe.throw("Bill not found", frappe.DoesNotExistError)
+    return frappe.get_doc(FPOS_SALE, name)
+
+
+@frappe.whitelist(methods=["POST"])
+def create_franchise_sale(data):
+    """Make a bill. data = {items: [{item_code, qty}], buyer_name, buyer_mobile, payment_mode}.
+    The rate is never taken from the app: the server always puts MRP."""
+    customer = _fpos_franchise(FPOS_SALE, "create")
+    data = _fpos_json(data)
+    items = [{"item_code": r.get("item_code"), "qty": flt(r.get("qty"))} for r in (data.get("items") or [])
+             if r.get("item_code") and flt(r.get("qty")) > 0]
+    if not items:
+        frappe.throw("Add at least one item to the bill.")
+    doc = frappe.get_doc({
+        "doctype": FPOS_SALE, "franchise": customer, "source": "Mobile App",
+        "buyer_name": (data.get("buyer_name") or "").strip() or None,
+        "buyer_mobile": (data.get("buyer_mobile") or "").strip() or None,
+        "payment_mode": data.get("payment_mode") or "Cash",
+        "items": items,
+    })
+    doc.insert()
+    doc.submit()
+    return _fpos_bill(doc)
+
+
+@frappe.whitelist()
+def get_franchise_sales(date=None, start=0, search=None):
+    """Bills of the franchise, newest first. date = one day (YYYY-MM-DD); empty = all."""
+    customer = _fpos_franchise()
+    filters = {"franchise": customer, "docstatus": 1}
+    if date:
+        filters["posting_date"] = getdate(date)
+    or_filters = None
+    if search:
+        like = f"%{search.strip()}%"
+        or_filters = {"name": ["like", like], "buyer_name": ["like", like], "buyer_mobile": ["like", like]}
+    rows = frappe.get_list(
+        FPOS_SALE, filters=filters, or_filters=or_filters, fields=FPOS_BILL_FIELDS,
+        order_by="posting_date desc, posting_time desc, creation desc",
+        limit_start=cint(start), limit_page_length=FPOS_PAGE + 1)
+    out = {"bills": [_fpos_bill_row(r) for r in rows[:FPOS_PAGE]], "has_more": len(rows) > FPOS_PAGE}
+    if date:
+        out["summary"] = dict(fpos_stock.day_sales(customer, getdate(date)))
+    return out
+
+
+@frappe.whitelist()
+def get_franchise_sale(name):
+    """One bill with its items, what has already been returned, and whether it can still be returned."""
+    customer = _fpos_franchise()
+    doc = _fpos_get_bill(name, customer)
+    out = _fpos_bill(doc)
+    returned = {}
+    if not doc.is_return:
+        returned = dict(frappe.db.sql(
+            """select i.item_code, sum(i.qty) from `tabFranchise Sale Item` i
+            join `tabFranchise Sale` s on s.name = i.parent
+            where s.return_against = %s and s.docstatus = 1 and s.is_return = 1 group by i.item_code""", doc.name))
+    for i in out["items"]:
+        i["returned_qty"] = flt(returned.get(i["item_code"]))
+        i["returnable_qty"] = 0 if doc.is_return else flt(i["qty"] - i["returned_qty"], 3)
+    last_close = fpos_stock.last_closed_date(customer)
+    out["can_return"] = bool(
+        not doc.is_return
+        and any(i["returnable_qty"] > 0 for i in out["items"])
+        and not (last_close and last_close >= getdate(today()))
+        and frappe.has_permission(FPOS_SALE, "create") and frappe.has_permission(FPOS_SALE, "submit")
+    )
+    return out
+
+
+@frappe.whitelist(methods=["POST"])
+def return_franchise_sale(name, items=None):
+    """Take a bill back. items = [{item_code, qty}] for a part return; empty = everything that is left.
+    The stock comes back to the franchise and the day's sales go down."""
+    customer = _fpos_franchise(FPOS_SALE, "create")
+    bill = get_franchise_sale(name)
+    if bill["is_return"]:
+        frappe.throw("This is already a return.")
+    left = {i["item_code"]: i["returnable_qty"] for i in bill["items"]}
+    asked = _fpos_json(items) if items else None
+    if asked:
+        rows = [{"item_code": r.get("item_code"), "qty": flt(r.get("qty"))} for r in asked if flt(r.get("qty")) > 0]
+    else:
+        rows = [{"item_code": c, "qty": q} for c, q in left.items() if q > 0]
+    if not rows:
+        frappe.throw("Nothing is left to return on this bill.")
+    doc = frappe.get_doc({
+        "doctype": FPOS_SALE, "franchise": customer, "source": "Mobile App", "is_return": 1, "return_against": name,
+        "buyer_name": bill["buyer_name"], "buyer_mobile": bill["buyer_mobile"], "payment_mode": bill["payment_mode"],
+        "items": rows,
+    })
+    doc.insert()
+    doc.submit()
+    return _fpos_bill(doc)
+
+
+@frappe.whitelist()
+def get_franchise_day_close(date=None):
+    """The day-close sheet for one day: stock per item and the day's sales. If the day is already closed,
+    the saved figures come back with closed = true."""
+    customer = _fpos_franchise(FPOS_CLOSE)
+    day = getdate(date or today())
+    last_close = fpos_stock.last_closed_date(customer)
+    out = {"date": str(day), "last_closed": str(last_close) if last_close else None, "closed": False,
+           "can_close": bool(frappe.has_permission(FPOS_CLOSE, "create") and frappe.has_permission(FPOS_CLOSE, "submit"))}
+
+    done = frappe.get_list(FPOS_CLOSE, filters={"franchise": customer, "posting_date": day, "docstatus": 1},
+                           fields=["name"], limit_page_length=1)
+    if done:
+        doc = frappe.get_doc(FPOS_CLOSE, done[0].name)
+        rows, sales = doc.items, doc
+        out.update({"closed": True, "name": doc.name, "remarks": doc.remarks})
+    else:
+        rows = fpos_stock.day_figures(customer, day)
+        sales = fpos_stock.day_sales(customer, day)
+        if last_close and day <= last_close:
+            out["can_close"] = False
+
+    out["items"] = [{
+        "item_code": r.item_code, "item_name": r.item_name, "uom": r.uom,
+        "opening_qty": flt(r.opening_qty), "received_qty": flt(r.received_qty), "sold_qty": flt(r.sold_qty),
+        "returned_qty": flt(r.returned_qty), "expected_qty": flt(r.expected_qty),
+        "wastage_qty": flt(r.get("wastage_qty")),
+        "actual_qty": flt(r.get("actual_qty")) if done else flt(r.expected_qty),
+        "difference_qty": flt(r.get("difference_qty")),
+    } for r in rows]
+    out["sales"] = {k: flt(sales.get(k)) for k in ("bill_count", "total_sales", "return_amount", "net_sales",
+                                                   "cash_sales", "upi_sales", "card_sales", "credit_sales")}
+    return out
+
+
+@frappe.whitelist(methods=["POST"])
+def submit_franchise_day_close(data):
+    """Close the day. data = {posting_date, remarks, items: [{item_code, wastage_qty, actual_qty}]}.
+    Opening / received / sold are always worked out by the server."""
+    customer = _fpos_franchise(FPOS_CLOSE, "create")
+    data = _fpos_json(data)
+    doc = frappe.get_doc({
+        "doctype": FPOS_CLOSE, "franchise": customer, "source": "Mobile App",
+        "posting_date": getdate(data.get("posting_date") or today()),
+        "remarks": (data.get("remarks") or "").strip() or None,
+        "items": [{"item_code": r.get("item_code"), "wastage_qty": flt(r.get("wastage_qty")),
+                   "actual_qty": flt(r.get("actual_qty"))} for r in (data.get("items") or []) if r.get("item_code")],
+    })
+    doc.insert()
+    doc.submit()
+    return get_franchise_day_close(str(doc.posting_date))
