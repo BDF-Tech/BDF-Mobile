@@ -275,6 +275,23 @@ def get_my_dashboard_stats():
 # =========================================================
 
 
+SHIFTS = ("Morning", "Evening")
+
+
+def order_shifts(customer):
+    """The delivery shifts a customer may order for: Customer > Order Shift (Both / Morning / Evening)."""
+    if not frappe.get_meta("Customer").has_field("custom_order_shift"):
+        return list(SHIFTS)
+    v = frappe.db.get_value("Customer", customer, "custom_order_shift")
+    return [v] if v in SHIFTS else list(SHIFTS)
+
+
+@frappe.whitelist()
+def get_order_shifts():
+    """For the app's order screen: which shift buttons to show."""
+    return {"shifts": order_shifts(get_logged_in_customer())}
+
+
 @frappe.whitelist()
 def place_order(items, req_date=None, req_shift=None, po_no=None):
     try:
@@ -286,7 +303,10 @@ def place_order(items, req_date=None, req_shift=None, po_no=None):
             frappe.throw("Cannot place empty order")
 
         target_date = req_date or add_days(today(), 1)
-        target_shift = req_shift or "Morning"
+        allowed = order_shifts(customer_id)
+        target_shift = req_shift or allowed[0]
+        if target_shift not in allowed:
+            return {"status": "error", "message": f"Your orders can only be placed for the {allowed[0]} shift."}
 
         existing_so = frappe.db.get_value(
             "Sales Order",
@@ -2034,6 +2054,7 @@ from dairy.franchise_pos import stock as fpos_stock
 FPOS_SALE = "Franchise Sale"
 FPOS_CLOSE = "Franchise Day Close"
 FPOS_LEDGER = "Franchise Stock Ledger"
+FPOS_RECEIPT = "Franchise Stock Receipt"
 FPOS_BILL_FORMAT = "Franchise Bill"
 FPOS_PAGE = 20
 
@@ -2082,6 +2103,7 @@ def get_franchise_pos_access():
         "can_bill": bool(frappe.has_permission(FPOS_SALE, "create") and frappe.has_permission(FPOS_SALE, "submit")),
         "can_close": bool(frappe.has_permission(FPOS_CLOSE, "create") and frappe.has_permission(FPOS_CLOSE, "submit")),
         "can_stock": bool(frappe.has_permission(FPOS_LEDGER, "read")),
+        "can_receive": bool(frappe.has_permission(FPOS_RECEIPT, "write") and frappe.has_permission(FPOS_RECEIPT, "submit")),
     })
     return out
 
@@ -2109,12 +2131,21 @@ def get_franchise_pos_home():
         }
 
     last_close = fpos_stock.last_closed_date(customer)
+    pending = fpos_stock.pending_close_date(customer)
     out["day_close"] = {
         "last_closed": str(last_close) if last_close else None,
         "today_closed": bool(last_close and last_close >= getdate(day)),
-        # yesterday (or earlier) was never closed
-        "pending": bool(not last_close or last_close < getdate(add_days(day, -1))),
+        # an earlier day with bills is not closed yet: billing stays locked until it is
+        "pending": bool(pending),
+        "pending_date": str(pending) if pending else None,
+        "billing_locked": bool(pending),
     }
+
+    # BDF deliveries waiting for the franchise to confirm
+    if frappe.has_permission(FPOS_RECEIPT, "read"):
+        waiting = frappe.get_list(FPOS_RECEIPT, filters={"franchise": customer, "docstatus": 0},
+                                  fields=FPOS_DELIVERY_FIELDS, order_by="invoice_date, creation", limit_page_length=10)
+        out["deliveries"] = {"waiting": len(waiting), "items": [_fpos_delivery_row(r) for r in waiting]}
 
     # get_list = the user's own permissions apply; the franchise filter only narrows further
     out["recent"] = [_fpos_bill_row(r) for r in frappe.get_list(
@@ -2258,6 +2289,7 @@ def get_franchise_sale(name):
         not doc.is_return
         and any(i["returnable_qty"] > 0 for i in out["items"])
         and not (last_close and last_close >= getdate(today()))
+        and not fpos_stock.pending_close_date(customer)
         and frappe.has_permission(FPOS_SALE, "create") and frappe.has_permission(FPOS_SALE, "submit")
     )
     return out
@@ -2292,24 +2324,38 @@ def return_franchise_sale(name, items=None):
 @frappe.whitelist()
 def get_franchise_day_close(date=None):
     """The day-close sheet for one day: stock per item and the day's sales. If the day is already closed,
-    the saved figures come back with closed = true."""
+    the saved figures come back with closed = true. No date = the oldest day still waiting, else today."""
     customer = _fpos_franchise(FPOS_CLOSE)
-    day = getdate(date or today())
+    pending = fpos_stock.pending_close_date(customer)
+    day = getdate(date or pending or today())
     last_close = fpos_stock.last_closed_date(customer)
     out = {"date": str(day), "last_closed": str(last_close) if last_close else None, "closed": False,
+           "pending_date": str(pending) if pending else None,
            "can_close": bool(frappe.has_permission(FPOS_CLOSE, "create") and frappe.has_permission(FPOS_CLOSE, "submit"))}
+    if pending and day > pending:
+        out["can_close"] = False
+        out["blocked_reason"] = f"Close {formatdate(pending)} first. Days are closed in order."
+    waiting = fpos_stock.pending_receipts(customer, day)
+    out["pending_deliveries"] = [_fpos_delivery_row(r) for r in waiting]
+    if waiting and not out.get("blocked_reason"):
+        out["can_close"] = False
+        out["blocked_reason"] = "Confirm the BDF delivery first. Its stock must be counted before the day closes."
 
     done = frappe.get_list(FPOS_CLOSE, filters={"franchise": customer, "posting_date": day, "docstatus": 1},
                            fields=["name"], limit_page_length=1)
     if done:
         doc = frappe.get_doc(FPOS_CLOSE, done[0].name)
-        rows, sales = doc.items, doc
-        out.update({"closed": True, "name": doc.name, "remarks": doc.remarks})
+        rows, sales, cash = doc.items, doc, doc
+        out.update({"closed": True, "name": doc.name, "remarks": doc.remarks, "auto_closed": cint(doc.auto_closed)})
     else:
         rows = fpos_stock.day_figures(customer, day)
         sales = fpos_stock.day_sales(customer, day)
+        cash = frappe.new_doc(FPOS_CLOSE)
+        cash.update({"franchise": customer, "posting_date": day, "cash_sales": sales.cash_sales})
+        cash.set_cash()
         if last_close and day <= last_close:
             out["can_close"] = False
+            out["blocked_reason"] = "A later day is already closed."
 
     out["items"] = [{
         "item_code": r.item_code, "item_name": r.item_name, "uom": r.uom,
@@ -2321,22 +2367,159 @@ def get_franchise_day_close(date=None):
     } for r in rows]
     out["sales"] = {k: flt(sales.get(k)) for k in ("bill_count", "total_sales", "return_amount", "net_sales",
                                                    "cash_sales", "upi_sales", "card_sales", "credit_sales")}
+    out["cash"] = {k: flt(cash.get(k)) for k in ("opening_cash", "cash_sales", "expected_cash", "counted_cash",
+                                                 "cash_difference", "cash_handed_over", "cash_in_drawer")}
+    out["cash"]["cash_remarks"] = cash.get("cash_remarks") if done else None
     return out
 
 
 @frappe.whitelist(methods=["POST"])
 def submit_franchise_day_close(data):
-    """Close the day. data = {posting_date, remarks, items: [{item_code, wastage_qty, actual_qty}]}.
-    Opening / received / sold are always worked out by the server."""
+    """Close the day. data = {posting_date, remarks, counted_cash, cash_handed_over, cash_remarks,
+    items: [{item_code, wastage_qty, actual_qty}]}. Opening / received / sold / expected cash are always worked
+    out by the server."""
     customer = _fpos_franchise(FPOS_CLOSE, "create")
     data = _fpos_json(data)
+    if data.get("counted_cash") in (None, ""):
+        frappe.throw("Count the cash in the drawer and enter it (0 if there is none).")
     doc = frappe.get_doc({
         "doctype": FPOS_CLOSE, "franchise": customer, "source": "Mobile App",
         "posting_date": getdate(data.get("posting_date") or today()),
         "remarks": (data.get("remarks") or "").strip() or None,
+        "counted_cash": flt(data.get("counted_cash")),
+        "cash_handed_over": flt(data.get("cash_handed_over")),
+        "cash_remarks": (data.get("cash_remarks") or "").strip() or None,
         "items": [{"item_code": r.get("item_code"), "wastage_qty": flt(r.get("wastage_qty")),
                    "actual_qty": flt(r.get("actual_qty"))} for r in (data.get("items") or []) if r.get("item_code")],
     })
     doc.insert()
     doc.submit()
     return get_franchise_day_close(str(doc.posting_date))
+
+
+FPOS_DELIVERY_FIELDS = ["name", "sales_invoice", "invoice_date", "posting_date", "status", "total_invoiced_qty",
+                        "total_received_qty", "total_short_qty", "total_damaged_qty", "loss_amount", "auto_received"]
+
+
+def _fpos_delivery_row(r):
+    return {
+        "name": r.name, "sales_invoice": r.sales_invoice, "invoice_date": str(r.invoice_date or ""),
+        "posting_date": str(r.get("posting_date") or ""), "status": r.get("status") or "Pending",
+        "total_invoiced_qty": flt(r.total_invoiced_qty), "total_received_qty": flt(r.get("total_received_qty")),
+        "total_short_qty": flt(r.get("total_short_qty")), "total_damaged_qty": flt(r.get("total_damaged_qty")),
+        "loss_amount": flt(r.get("loss_amount")), "auto_received": cint(r.get("auto_received")),
+    }
+
+
+def _fpos_get_delivery(name, customer):
+    rows = frappe.get_list(FPOS_RECEIPT, filters={"name": name, "franchise": customer, "docstatus": ["<", 2]},
+                           fields=["name"], limit_page_length=1)
+    if not rows:
+        frappe.throw("Delivery not found", frappe.DoesNotExistError)
+    return frappe.get_doc(FPOS_RECEIPT, name)
+
+
+def _fpos_delivery(doc):
+    out = _fpos_delivery_row(doc)
+    out.update({
+        "docstatus": doc.docstatus, "remarks": doc.remarks,
+        "can_confirm": bool(doc.docstatus == 0 and frappe.has_permission(FPOS_RECEIPT, "write", doc=doc)
+                            and frappe.has_permission(FPOS_RECEIPT, "submit", doc=doc)),
+        "items": [{
+            "item_code": d.item_code, "item_name": d.item_name, "uom": d.uom,
+            "image": frappe.get_cached_value("Item", d.item_code, "image"),
+            "invoiced_qty": flt(d.invoiced_qty), "short_qty": flt(d.short_qty), "damaged_qty": flt(d.damaged_qty),
+            "received_qty": flt(d.received_qty), "reason": d.reason, "loss_amount": flt(d.loss_amount),
+            "billed_qty": flt(d.billed_qty) or flt(d.invoiced_qty), "returned_qty": flt(d.returned_qty),
+            "credited_qty": flt(d.credited_qty),
+        } for d in doc.items],
+        "credits": [{"credit_note": c.credit_note, "posting_date": str(c.posting_date or ""), "item_code": c.item_code,
+                     "item_name": c.item_name, "qty": flt(c.qty), "covered_qty": flt(c.covered_qty),
+                     "stock_qty": flt(c.stock_qty)} for c in doc.credits],
+        "open_loss_amount": flt(doc.open_loss_amount),
+        "credit_note": doc.credit_note,
+        "credit_note_state": (frappe.db.get_value("Sales Invoice", doc.credit_note, "workflow_state")
+                              if doc.credit_note else None),
+        "reasons": [o for o in (frappe.get_meta("Franchise Stock Receipt Item").get_field("reason").options or "").split("\n") if o],
+    })
+    return out
+
+
+@frappe.whitelist()
+def get_franchise_deliveries(start=0, waiting=0):
+    """BDF deliveries of the franchise, waiting ones first. waiting=1: only those still to confirm."""
+    customer = _fpos_franchise(FPOS_RECEIPT)
+    filters = {"franchise": customer, "docstatus": 0 if cint(waiting) else ["<", 2]}
+    rows = frappe.get_list(FPOS_RECEIPT, filters=filters, fields=FPOS_DELIVERY_FIELDS + ["docstatus"],
+                           order_by="docstatus asc, invoice_date desc, creation desc",
+                           limit_start=cint(start), limit_page_length=FPOS_PAGE + 1)
+    return {"deliveries": [_fpos_delivery_row(r) for r in rows[:FPOS_PAGE]], "has_more": len(rows) > FPOS_PAGE}
+
+
+@frappe.whitelist()
+def get_franchise_delivery(name):
+    customer = _fpos_franchise(FPOS_RECEIPT)
+    return _fpos_delivery(_fpos_get_delivery(name, customer))
+
+
+@frappe.whitelist(methods=["POST"])
+def confirm_franchise_delivery(name, items=None, remarks=None):
+    """Confirm a BDF delivery. items = [{item_code, short_qty, damaged_qty, reason}] only for what did not arrive
+    or cannot be sold; everything else is taken as received in full."""
+    customer = _fpos_franchise(FPOS_RECEIPT, "write")
+    doc = _fpos_get_delivery(name, customer)
+    if doc.docstatus != 0:
+        frappe.throw("This delivery is already confirmed.")
+    given = {r.get("item_code"): r for r in (_fpos_json(items) or []) if r.get("item_code")}
+    for d in doc.items:
+        r = given.get(d.item_code) or {}
+        d.short_qty = flt(r.get("short_qty"))
+        d.damaged_qty = flt(r.get("damaged_qty"))
+        d.reason = (r.get("reason") or None) if (d.short_qty or d.damaged_qty) else None
+    doc.remarks = (remarks or "").strip() or None
+    doc.source = "Mobile App"
+    doc.save()
+    doc.submit()
+    return _fpos_delivery(doc)
+
+
+@frappe.whitelist()
+def get_franchise_reorder(shift="Morning"):
+    """Tomorrow's order suggestion: average daily sales + safety margin - stock in hand - already ordered,
+    rounded up to whole crates / boxes. The franchise changes what it likes and places it."""
+    customer = _fpos_franchise(FPOS_LEDGER)
+    from dairy.franchise_pos import reorder
+
+    allowed = order_shifts(customer)
+    out = reorder.suggest(customer, shift=shift if shift in allowed else allowed[0])
+    out["shifts"] = allowed
+    return out
+
+
+@frappe.whitelist(methods=["POST"])
+def place_franchise_reorder(items, shift="Morning"):
+    """Places the order through the normal app order (place_order), so the customer's price list,
+    minimum-order and mandatory-item rules all apply. items = [{item_code, qty}] in the suggested units."""
+    customer = _fpos_franchise(FPOS_LEDGER)
+    from dairy.franchise_pos import reorder
+
+    allowed = order_shifts(customer)
+    if shift not in allowed:
+        frappe.throw(f"Your orders can only be placed for the {allowed[0]} shift.")
+    plan = {r["item_code"]: r for r in reorder.suggest(customer, shift=shift)["items"]}
+    orderable = reorder._orderable_items(customer)
+    cart = []
+    for row in _fpos_json(items) or []:
+        code, qty = row.get("item_code"), flt(row.get("qty"))
+        if not code or qty <= 0 or code not in orderable:
+            continue
+        # place_order always adds an item's fixed (mandatory) quantity on top: send only the rest
+        qty -= flt((plan.get(code) or {}).get("fixed_qty"))
+        if qty > 0:
+            cart.append({"item_code": code, "uom": orderable[code]["uom"], "qty": qty})
+    if not cart:
+        frappe.throw("Add at least one item to the order (fixed items are added on their own).")
+    res = place_order(json.dumps(cart), req_date=reorder.suggest(customer, shift=shift)["target_date"], req_shift=shift)
+    if (res or {}).get("status") != "success":
+        frappe.throw((res or {}).get("message") or "The order could not be placed.")
+    return res
